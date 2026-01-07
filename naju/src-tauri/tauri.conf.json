@@ -20,9 +20,12 @@
     },
     "windows": [
       {
-        "title": "naju",
-        "width": 800,
-        "height": 600
+        "title": "NAJU",
+        "width": 1200,
+        "height": 760,
+        "minWidth": 980,
+        "minHeight": 640,
+        "resizable": true
       }
     ],
     "security": {

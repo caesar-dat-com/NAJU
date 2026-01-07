@@ -2,66 +2,86 @@ import { invoke } from "@tauri-apps/api/tauri";
 
 export type Patient = {
     id: string;
-    full_name: string;
-    document_type?: string | null;
-    document_number?: string | null;
-    date_of_birth?: string | null;
+    name: string;
+    doc_type: string | null;
+    doc_number: string | null;
+    insurer: string | null;
+    birth_date: string | null; // YYYY-MM-DD
+    sex: string | null;
+    phone: string | null;
+    email: string | null;
+    address: string | null;
+    emergency_contact: string | null;
+    notes: string | null;
+    photo_path: string | null; // absolute path in OS (backend)
+    created_at: string; // ISO
+    updated_at: string; // ISO
+};
+
+export type PatientInput = {
+    name: string;
+    doc_type?: string | null;
+    doc_number?: string | null;
+    insurer?: string | null;
+    birth_date?: string | null;
     sex?: string | null;
     phone?: string | null;
     email?: string | null;
     address?: string | null;
-    insurance?: string | null;
     emergency_contact?: string | null;
     notes?: string | null;
-    photo_filename?: string | null;
-    created_at: string;
-    updated_at: string;
 };
 
-export type PatientInput = Omit<Patient, "id" | "created_at" | "updated_at" | "photo_filename">;
-
-export type PatientDetail = {
-    patient: Patient;
-    folder: string;
-    photo_path?: string | null;
-    files: string[];
-    exams: string[];
+export type PatientFile = {
+    id: number;
+    patient_id: string;
+    kind: "attachment" | "exam" | "photo";
+    filename: string;
+    created_at: string; // ISO
+    path: string; // absolute path for opening / preview
+    meta_json: string | null;
 };
 
-export type MseInput = {
-    appearance?: string | null;
-    behavior?: string | null;
-    attitude?: string | null;
-    speech?: string | null;
-    mood?: string | null;
-    affect?: string | null;
-    thought_process?: string | null;
-    thought_content?: string | null;
-    perception?: string | null;
-    cognition_orientation?: string | null;
-    cognition_attention?: string | null;
-    cognition_memory?: string | null;
-    insight?: string | null;
-    judgment?: string | null;
-    risk_suicide?: string | null;
-    risk_homicide?: string | null;
-    risk_self_harm?: string | null;
-    risk_violence?: string | null;
-    sleep?: string | null;
-    appetite?: string | null;
-    substance_use?: string | null;
-    diagnosis_impression?: string | null;
-    plan?: string | null;
-    clinician_notes?: string | null;
-};
+function normQuery(q?: string) {
+    return (q ?? "").trim();
+}
 
-export const api = {
-    listPatients: (query?: string) => invoke<Patient[]>("list_patients", { query }),
-    createPatient: (input: PatientInput) => invoke<Patient>("create_patient", { input }),
-    updatePatient: (patientId: string, input: PatientInput) =>
-        invoke<Patient>("update_patient", { patientId, input }),
-    getDetail: (patientId: string) => invoke<PatientDetail>("get_patient_detail", { patientId }),
-    importFiles: (patientId: string, paths: string[]) => invoke<string[]>("import_files", { patientId, paths }),
-    setPhoto: (patientId: string, path: string) => invoke<string>("set_patient_photo", { patientId, path }),
-    createMse: (patientId: string, mse: MseInput) => invoke<string>("create_mse", { patientId, mse }),
-};
+export async function listPatients(query?: string): Promise<Patient[]> {
+    return await invoke("list_patients", { query: normQuery(query) });
+}
+
+export async function createPatient(input: PatientInput): Promise<Patient> {
+    return await invoke("create_patient", { input });
+}
+
+export async function updatePatient(patientId: string, input: PatientInput): Promise<Patient> {
+    return await invoke("update_patient", { patientId, input });
+}
+
+export async function deletePatient(patientId: string): Promise<void> {
+    await invoke("delete_patient", { patientId });
+}
+
+export async function setPatientPhoto(patientId: string, sourcePath: string): Promise<Patient> {
+    return await invoke("set_patient_photo", { patientId, sourcePath });
+}
+
+export async function importFiles(patientId: string, sourcePaths: string[]): Promise<PatientFile[]> {
+    return await invoke("import_files", { patientId, sourcePaths });
+}
+
+export async function listPatientFiles(patientId: string): Promise<PatientFile[]> {
+    return await invoke("list_patient_files", { patientId });
+}
+
+export async function createMentalExam(patientId: string, payload: any): Promise<PatientFile> {
+    return await invoke("create_mental_exam", { patientId, payload });
+}
+
+export async function openPath(path: string): Promise<void> {
+    await invoke("open_path", { path });
+}
+
+export async function openPatientFolder(patientId: string): Promise<void> {
+    await invoke("open_patient_folder", { patientId });
+}
