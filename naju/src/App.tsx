@@ -10,14 +10,9 @@ import {
   importFiles,
   listPatientFiles,
   listPatients,
-  openPath,
-  openPatientFolder,
   setPatientPhoto,
   updatePatient,
 } from "./lib/api";
-
-import { open } from "@tauri-apps/api/dialog";
-import { convertFileSrc } from "@tauri-apps/api/tauri";
 
 type Section = "resumen" | "examenes" | "archivos";
 
@@ -577,6 +572,8 @@ export default function App() {
   const [showExam, setShowExam] = useState(false);
 
   const toastTimer = useRef<number | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   function pushToast(t: Toast) {
     if (toastTimer.current) window.clearTimeout(toastTimer.current);
@@ -678,59 +675,53 @@ export default function App() {
 
   async function actionPickPhoto() {
     if (!selected) return;
-    try {
-      const picked = await open({
-        multiple: false,
-        filters: [{ name: "Imagen", extensions: ["png", "jpg", "jpeg", "webp"] }],
-      });
-      if (!picked || typeof picked !== "string") return;
-
-      await setPatientPhoto(selected.id, picked);
-      await refreshPatients();
-      pushToast({ type: "ok", msg: "Foto actualizada ✅" });
-    } catch (e: any) {
-      pushToast({ type: "err", msg: `Error foto: ${errMsg(e)}` });
-    }
+    photoInputRef.current?.click();
   }
 
   async function actionAttachFiles() {
     if (!selected) return;
-    try {
-      const picked = await open({ multiple: true });
-      if (!picked) return;
-
-      const paths = Array.isArray(picked) ? picked : [picked];
-      if (!paths.length) return;
-
-      await importFiles(selected.id, paths);
-      await refreshFiles(selected.id);
-      pushToast({ type: "ok", msg: "Archivos adjuntados ✅" });
-      startVT(() => setSection("archivos"));
-    } catch (e: any) {
-      pushToast({ type: "err", msg: `Error adjuntar: ${errMsg(e)}` });
-    }
-  }
-
-  async function actionOpenFolder() {
-    if (!selected) return;
-    try {
-      await openPatientFolder(selected.id);
-    } catch (e: any) {
-      pushToast({ type: "err", msg: `No se pudo abrir carpeta: ${errMsg(e)}` });
-    }
+    fileInputRef.current?.click();
   }
 
   async function actionOpenFile(path: string) {
+    if (!path) return;
+    window.open(path, "_blank", "noopener,noreferrer");
+  }
+
+  async function onPhotoSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    if (!selected) return;
+    const file = e.target.files?.[0];
+    if (!file) return;
     try {
-      await openPath(path);
-    } catch (e: any) {
-      pushToast({ type: "err", msg: `No se pudo abrir: ${errMsg(e)}` });
+      await setPatientPhoto(selected.id, file);
+      await refreshPatients();
+      pushToast({ type: "ok", msg: "Foto actualizada ✅" });
+    } catch (err: any) {
+      pushToast({ type: "err", msg: `Error foto: ${errMsg(err)}` });
+    } finally {
+      e.target.value = "";
+    }
+  }
+
+  async function onFilesSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    if (!selected) return;
+    const files = e.target.files ? Array.from(e.target.files) : [];
+    if (!files.length) return;
+    try {
+      await importFiles(selected.id, files);
+      await refreshFiles(selected.id);
+      pushToast({ type: "ok", msg: "Archivos adjuntados ✅" });
+      startVT(() => setSection("archivos"));
+    } catch (err: any) {
+      pushToast({ type: "err", msg: `Error adjuntar: ${errMsg(err)}` });
+    } finally {
+      e.target.value = "";
     }
   }
 
   async function actionDeleteSelected() {
     if (!selected) return;
-    const ok = confirm(`¿Eliminar a "${selected.name}"? Esto no borra tus archivos físicos (solo la referencia).`);
+    const ok = confirm(`¿Eliminar a "${selected.name}"? Se eliminarán los datos locales guardados en este navegador.`);
     if (!ok) return;
     try {
       await deletePatient(selected.id);
@@ -743,15 +734,25 @@ export default function App() {
 
   const selectedPhotoSrc = useMemo(() => {
     if (!selected?.photo_path) return null;
-    try {
-      return convertFileSrc(selected.photo_path);
-    } catch {
-      return null;
-    }
+    return selected.photo_path;
   }, [selected?.photo_path]);
 
   return (
     <div className="app">
+      <input
+        ref={photoInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        onChange={onPhotoSelected}
+        style={{ display: "none" }}
+      />
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        onChange={onFilesSelected}
+        style={{ display: "none" }}
+      />
       <div className="shell">
         {/* Sidebar */}
         <aside className="sidebar">
@@ -760,9 +761,9 @@ export default function App() {
               <div className="brand">
                 <div className="title">
                   <span>naju</span>
-                  <span style={{ fontSize: 11, color: "var(--muted)" }}>gestor local</span>
+                  <span style={{ fontSize: 11, color: "var(--muted)" }}>gestor web</span>
                 </div>
-                <div className="subtitle">pacientes · exámenes · archivos (estética tierra)</div>
+                <div className="subtitle">pacientes · exámenes · archivos (web)</div>
               </div>
 
               <div className="pillRow">
@@ -794,7 +795,7 @@ export default function App() {
 
             {filtered.map((p) => {
               const age = calcAge(p.birth_date);
-              const img = p.photo_path ? convertFileSrc(p.photo_path) : null;
+              const img = p.photo_path ?? null;
 
               return (
                 <div
@@ -865,9 +866,6 @@ export default function App() {
               </button>
               <button className="iconBtn" disabled={!selected} onClick={actionAttachFiles}>
                 adjuntar
-              </button>
-              <button className="iconBtn" disabled={!selected} onClick={actionOpenFolder}>
-                carpeta
               </button>
             </div>
           </div>
