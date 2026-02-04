@@ -239,7 +239,7 @@ function RadarChart({
       {points.map((p, idx) => (
         <line key={idx} x1={center} y1={center} x2={p.x} y2={p.y} className="radarAxis" />
       ))}
-      <polygon points={polygon} className="radarFill radarAnimate" style={{ fill: accent }} />
+      <polygon points={polygon} className="radarFill" style={{ fill: accent }} />
       {labels.map((label, idx) => {
         const angle = (Math.PI * 2 * idx) / labels.length - Math.PI / 2;
         const labelRadius = radius + 18;
@@ -1315,6 +1315,18 @@ export default function App() {
     return map;
   }, [patients, allFiles]);
 
+  const profileByPatientMap = useMemo(() => {
+    const map = new Map<string, { values: number[]; accent: string; label: string | null }>();
+    patients.forEach((patient) => {
+      const patientFiles = allFiles.filter((f) => f.patient_id === patient.id);
+      const { values, dominant } = getAxisValues(patientFiles);
+      const label = dominant?.label ?? null;
+      const accent = label ? PROFILE_COLORS[label] : "#c7a45a";
+      map.set(patient.id, { values, accent, label });
+    });
+    return map;
+  }, [patients, allFiles]);
+
   const profileByPatient = useMemo(() => {
     const map = new Map<string, { values: number[]; accent: string; label: string | null }>();
     patients.forEach((patient) => {
@@ -1887,6 +1899,21 @@ export default function App() {
           }}
         />
       ) : null}
+
+      {showNote && selected ? (
+        <NoteModal
+          patient={selected}
+          onClose={() => setShowNote(false)}
+          onCreated={async () => {
+            await refreshFiles(selected.id);
+            await refreshAllFiles();
+            pushToast({ type: "ok", msg: "Nota creada ✅" });
+            startVT(() => setSection("notas"));
+          }}
+        />
+      ) : null}
+
+      {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
 
       {showNote && selected ? (
         <NoteModal
