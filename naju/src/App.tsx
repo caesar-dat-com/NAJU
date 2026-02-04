@@ -1317,6 +1317,66 @@ export default function App() {
 
   const profileByPatientId = useMemo(() => buildProfileMap(patients, allFiles), [patients, allFiles]);
 
+  const profileByPatientId = useMemo(() => {
+    const map = new Map<string, { values: number[]; accent: string; label: string | null }>();
+    patients.forEach((patient) => {
+      const patientFiles = allFiles.filter((f) => f.patient_id === patient.id);
+      const { values, dominant } = getAxisValues(patientFiles);
+      const label = dominant?.label ?? null;
+      const accent = label ? PROFILE_COLORS[label] : "#c7a45a";
+      map.set(patient.id, { values, accent, label });
+    });
+    return map;
+  }, [patients, allFiles]);
+
+  const profileByPatientMap = useMemo(() => {
+    const map = new Map<string, { values: number[]; accent: string; label: string | null }>();
+    patients.forEach((patient) => {
+      const patientFiles = allFiles.filter((f) => f.patient_id === patient.id);
+      const { values, dominant } = getAxisValues(patientFiles);
+      const label = dominant?.label ?? null;
+      const accent = label ? PROFILE_COLORS[label] : "#c7a45a";
+      map.set(patient.id, { values, accent, label });
+    });
+    return map;
+  }, [patients, allFiles]);
+
+  const profileByPatientMap = useMemo(() => {
+    const map = new Map<string, { values: number[]; accent: string; label: string | null }>();
+    patients.forEach((patient) => {
+      const patientFiles = allFiles.filter((f) => f.patient_id === patient.id);
+      const { values, dominant } = getAxisValues(patientFiles);
+      const label = dominant?.label ?? null;
+      const accent = label ? PROFILE_COLORS[label] : "#c7a45a";
+      map.set(patient.id, { values, accent, label });
+    });
+    return map;
+  }, [patients, allFiles]);
+
+  const profileByPatient = useMemo(() => {
+    const map = new Map<string, { values: number[]; accent: string; label: string | null }>();
+    patients.forEach((patient) => {
+      const patientFiles = allFiles.filter((f) => f.patient_id === patient.id);
+      const { values, dominant } = getAxisValues(patientFiles);
+      const label = dominant?.label ?? null;
+      const accent = label ? PROFILE_COLORS[label] : "#c7a45a";
+      map.set(patient.id, { values, accent, label });
+    });
+    return map;
+  }, [patients, allFiles]);
+
+  const profileByPatient = useMemo(() => {
+    const map = new Map<string, { values: number[]; accent: string; label: string | null }>();
+    patients.forEach((patient) => {
+      const patientFiles = allFiles.filter((f) => f.patient_id === patient.id);
+      const { values, dominant } = getAxisValues(patientFiles);
+      const label = dominant?.label ?? null;
+      const accent = label ? PROFILE_COLORS[label] : "#c7a45a";
+      map.set(patient.id, { values, accent, label });
+    });
+    return map;
+  }, [patients, allFiles]);
+
   async function refreshPatients() {
     const list = await listPatients("");
     setPatients(list);
@@ -1865,6 +1925,81 @@ export default function App() {
           }}
         />
       ) : null}
+
+      {showNote && selected ? (
+        <NoteModal
+          patient={selected}
+          onClose={() => setShowNote(false)}
+          onCreated={async () => {
+            await refreshFiles(selected.id);
+            await refreshAllFiles();
+            pushToast({ type: "ok", msg: "Nota creada ✅" });
+            startVT(() => setSection("notas"));
+          }}
+        />
+      ) : null}
+
+      {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
+
+      {showNote && selected ? (
+        <NoteModal
+          patient={selected}
+          onClose={() => setShowNote(false)}
+          onCreated={async () => {
+            await refreshFiles(selected.id);
+            await refreshAllFiles();
+            pushToast({ type: "ok", msg: "Nota creada ✅" });
+            startVT(() => setSection("notas"));
+          }}
+        />
+      ) : null}
+
+      {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
+
+      {showNote && selected ? (
+        <NoteModal
+          patient={selected}
+          onClose={() => setShowNote(false)}
+          onCreated={async () => {
+            await refreshFiles(selected.id);
+            await refreshAllFiles();
+            pushToast({ type: "ok", msg: "Nota creada ✅" });
+            startVT(() => setSection("notas"));
+          }}
+        />
+      ) : null}
+
+      {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
+
+      {showNote && selected ? (
+        <NoteModal
+          patient={selected}
+          onClose={() => setShowNote(false)}
+          onCreated={async () => {
+            await refreshFiles(selected.id);
+            await refreshAllFiles();
+            pushToast({ type: "ok", msg: "Nota creada ✅" });
+            startVT(() => setSection("notas"));
+          }}
+        />
+      ) : null}
+
+      {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
+
+      {showNote && selected ? (
+        <NoteModal
+          patient={selected}
+          onClose={() => setShowNote(false)}
+          onCreated={async () => {
+            await refreshFiles(selected.id);
+            await refreshAllFiles();
+            pushToast({ type: "ok", msg: "Nota creada ✅" });
+            startVT(() => setSection("notas"));
+          }}
+        />
+      ) : null}
+
+      {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
 
       {showNote && selected ? (
         <NoteModal
