@@ -33,7 +33,7 @@ export type PatientInput = {
 export type PatientFile = {
   id: number;
   patient_id: string;
-  kind: "attachment" | "exam" | "photo";
+  kind: "attachment" | "exam" | "note" | "photo";
   filename: string;
   created_at: string;
   path: string;
@@ -213,6 +213,11 @@ export async function listPatientFiles(patientId: string): Promise<PatientFile[]
   return store.files.filter((f) => f.patient_id === patientId);
 }
 
+export async function listAllFiles(): Promise<PatientFile[]> {
+  const store = loadStore();
+  return store.files;
+}
+
 export async function createMentalExam(patientId: string, payload: any): Promise<PatientFile> {
   const store = loadStore();
   const createdAt = nowIso();
@@ -223,6 +228,26 @@ export async function createMentalExam(patientId: string, payload: any): Promise
     id: store.nextFileId++,
     patient_id: patientId,
     kind: "exam",
+    filename,
+    created_at: createdAt,
+    path: dataUrl,
+    meta_json: json,
+  };
+  store.files.unshift(entry);
+  saveStore(store);
+  return entry;
+}
+
+export async function createPatientNote(patientId: string, payload: any): Promise<PatientFile> {
+  const store = loadStore();
+  const createdAt = nowIso();
+  const filename = `nota-${createdAt.slice(0, 10)}.json`;
+  const json = JSON.stringify(payload, null, 2);
+  const dataUrl = `data:application/json;charset=utf-8,${encodeURIComponent(json)}`;
+  const entry: PatientFile = {
+    id: store.nextFileId++,
+    patient_id: patientId,
+    kind: "note",
     filename,
     created_at: createdAt,
     path: dataUrl,
