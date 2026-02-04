@@ -96,6 +96,18 @@ function scoreLookup(value: string | null | undefined, map: Record<string, numbe
   return map[value] ?? 0;
 }
 
+function buildProfileMap(patients: Patient[], allFiles: PatientFile[]) {
+  const map = new Map<string, { values: number[]; accent: string; label: string | null }>();
+  patients.forEach((patient) => {
+    const patientFiles = allFiles.filter((f) => f.patient_id === patient.id);
+    const { values, dominant } = getAxisValues(patientFiles);
+    const label = dominant?.label ?? null;
+    const accent = label ? PROFILE_COLORS[label] : "#c7a45a";
+    map.set(patient.id, { values, accent, label });
+  });
+  return map;
+}
+
 const AXES = [
   {
     key: "estado_de_animo",
@@ -1303,6 +1315,8 @@ export default function App() {
     return { attachments, exams, notes, photos };
   }, [files]);
 
+  const profileByPatientId = useMemo(() => buildProfileMap(patients, allFiles), [patients, allFiles]);
+
   const profileByPatientId = useMemo(() => {
     const map = new Map<string, { values: number[]; accent: string; label: string | null }>();
     patients.forEach((patient) => {
@@ -1911,6 +1925,21 @@ export default function App() {
           }}
         />
       ) : null}
+
+      {showNote && selected ? (
+        <NoteModal
+          patient={selected}
+          onClose={() => setShowNote(false)}
+          onCreated={async () => {
+            await refreshFiles(selected.id);
+            await refreshAllFiles();
+            pushToast({ type: "ok", msg: "Nota creada ✅" });
+            startVT(() => setSection("notas"));
+          }}
+        />
+      ) : null}
+
+      {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
 
       {showNote && selected ? (
         <NoteModal
