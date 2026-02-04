@@ -239,7 +239,7 @@ function RadarChart({
       {points.map((p, idx) => (
         <line key={idx} x1={center} y1={center} x2={p.x} y2={p.y} className="radarAxis" />
       ))}
-      <polygon points={polygon} className="radarFill" style={{ fill: accent }} />
+      <polygon points={polygon} className="radarFill radarAnimate" style={{ fill: accent }} />
       {labels.map((label, idx) => {
         const angle = (Math.PI * 2 * idx) / labels.length - Math.PI / 2;
         const labelRadius = radius + 18;
@@ -484,19 +484,37 @@ function MentalExamModal({
   });
 
   const [motivo, setMotivo] = useState("");
-  const [aspecto, setAspecto] = useState("Adecuado");
-  const [conducta, setConducta] = useState("Cooperador");
-  const [actitud, setActitud] = useState("Colaborador");
+  const [lugarEntrevista, setLugarEntrevista] = useState("");
+  const [acompanante, setAcompanante] = useState("");
+  const [edadAparente, setEdadAparente] = useState("");
+  const [contextura, setContextura] = useState("");
+  const [etnia, setEtnia] = useState("");
+  const [estaturaEdad, setEstaturaEdad] = useState("");
+  const [arregloPersonal, setArregloPersonal] = useState("Adecuado");
+
+  const [contactoVisual, setContactoVisual] = useState("Intermitente");
+  const [contactoVerbal, setContactoVerbal] = useState("Normal");
+  const [actitud, setActitud] = useState("Colaboradora");
+
+  const [actividadCuant, setActividadCuant] = useState("Euquinético");
+  const [tonoMuscular, setTonoMuscular] = useState("Normotónico");
+  const [posicion, setPosicion] = useState("Postura habitual");
+  const [movimientos, setMovimientos] = useState("Adaptativos");
 
   const [lenguaje, setLenguaje] = useState("Normal");
   const [animo, setAnimo] = useState("Eutímico");
   const [afecto, setAfecto] = useState("Congruente");
   const [cursoPens, setCursoPens] = useState("Lógico/Coherente");
+  const [nexosAsociativos, setNexosAsociativos] = useState("Coherentes");
+  const [relevanciaPens, setRelevanciaPens] = useState("Relevante");
   const [contPens, setContPens] = useState("");
   const [percepcion, setPercepcion] = useState("Sin alteraciones");
   const [orientacion, setOrientacion] = useState("Orientado");
+  const [sensorio, setSensorio] = useState("Alerta");
   const [atencion, setAtencion] = useState("Conservada");
   const [memoria, setMemoria] = useState("Conservada");
+  const [calculo, setCalculo] = useState("Eucalculia");
+  const [abstraccion, setAbstraccion] = useState("Abstrae");
   const [juicio, setJuicio] = useState("Conservado");
   const [insight, setInsight] = useState("Presente");
   const [riesgo, setRiesgo] = useState("Sin riesgo aparente");
@@ -510,21 +528,39 @@ function MentalExamModal({
         fecha,
         motivo_consulta: motivo || null,
 
-        apariencia_aspecto_personal: aspecto,
-        conducta_psicomotora: conducta,
+        lugar_entrevista: lugarEntrevista || null,
+        acompanante: acompanante || null,
+        edad_aparente: edadAparente || null,
+        contextura_fisica: contextura || null,
+        caracteristicas_etnicas: etnia || null,
+        estatura_para_la_edad: estaturaEdad || null,
+        arreglo_personal: arregloPersonal,
+
+        contacto_visual: contactoVisual,
+        contacto_verbal: contactoVerbal,
         actitud: actitud,
+
+        actividad_motora_cuantitativa: actividadCuant,
+        tono_muscular: tonoMuscular,
+        posicion: posicion,
+        movimientos: movimientos,
 
         lenguaje,
         estado_de_animo: animo,
         afecto,
 
         pensamiento_curso: cursoPens,
+        pensamiento_nexos_asociativos: nexosAsociativos,
+        pensamiento_relevancia: relevanciaPens,
         pensamiento_contenido: contPens || null,
 
         percepcion,
         orientacion,
+        sensorio,
         atencion,
         memoria,
+        calculo,
+        abstraccion,
         juicio,
         insight,
         riesgo,
@@ -573,32 +609,114 @@ function MentalExamModal({
         <div className="card">
           <div className="formGrid">
             <div className="field">
-              <div className="label">Apariencia / aspecto personal</div>
-              <select className="select" value={aspecto} onChange={(e) => setAspecto(e.target.value)}>
+              <div className="label">Lugar de la entrevista</div>
+              <input
+                className="input"
+                value={lugarEntrevista}
+                onChange={(e) => setLugarEntrevista(e.target.value)}
+                placeholder="Consultorio, domicilio, hospital..."
+              />
+            </div>
+
+            <div className="field">
+              <div className="label">Acompañante</div>
+              <input
+                className="input"
+                value={acompanante}
+                onChange={(e) => setAcompanante(e.target.value)}
+                placeholder="Ej: Familiar, amigo, ninguno"
+              />
+            </div>
+
+            <div className="field">
+              <div className="label">Edad aparente</div>
+              <input
+                className="input"
+                value={edadAparente}
+                onChange={(e) => setEdadAparente(e.target.value)}
+                placeholder="Ej: acorde a la edad, menor..."
+              />
+            </div>
+
+            <div className="field">
+              <div className="label">Contextura física</div>
+              <input
+                className="input"
+                value={contextura}
+                onChange={(e) => setContextura(e.target.value)}
+                placeholder="Ej: delgado, atlético..."
+              />
+            </div>
+
+            <div className="field">
+              <div className="label">Características étnicas</div>
+              <input
+                className="input"
+                value={etnia}
+                onChange={(e) => setEtnia(e.target.value)}
+                placeholder="Describe si es relevante"
+              />
+            </div>
+
+            <div className="field">
+              <div className="label">Estatura para la edad</div>
+              <input
+                className="input"
+                value={estaturaEdad}
+                onChange={(e) => setEstaturaEdad(e.target.value)}
+                placeholder="Ej: acorde, baja, alta"
+              />
+            </div>
+
+            <div className="field">
+              <div className="label">Arreglo personal</div>
+              <select className="select" value={arregloPersonal} onChange={(e) => setArregloPersonal(e.target.value)}>
                 <option>Adecuado</option>
                 <option>Descuidado</option>
                 <option>Hipercuidado</option>
                 <option>Desaliñado</option>
               </select>
             </div>
+          </div>
+        </div>
 
+        <div className="card">
+          <div className="formGrid">
             <div className="field">
-              <div className="label">Conducta psicomotora</div>
-              <select className="select" value={conducta} onChange={(e) => setConducta(e.target.value)}>
-                <option>Cooperador</option>
-                <option>Inquieto</option>
-                <option>Agitado</option>
-                <option>Retardado</option>
+              <div className="label">Contacto visual</div>
+              <select className="select" value={contactoVisual} onChange={(e) => setContactoVisual(e.target.value)}>
+                <option>Intermitente</option>
+                <option>Sostenido</option>
+                <option>Mirada perpleja</option>
+                <option>Evitativo</option>
               </select>
             </div>
 
             <div className="field">
-              <div className="label">Actitud</div>
+              <div className="label">Contacto verbal</div>
+              <select className="select" value={contactoVerbal} onChange={(e) => setContactoVerbal(e.target.value)}>
+                <option>Normal</option>
+                <option>Escaso</option>
+                <option>Esporádico</option>
+                <option>Abundante</option>
+              </select>
+            </div>
+
+            <div className="field">
+              <div className="label">Actitud hacia el examinador</div>
               <select className="select" value={actitud} onChange={(e) => setActitud(e.target.value)}>
-                <option>Colaborador</option>
-                <option>Desconfiado</option>
+                <option>Colaboradora</option>
                 <option>Hostil</option>
-                <option>Inhibido</option>
+                <option>Indiferente</option>
+                <option>Desdeñoso</option>
+                <option>Evasivo</option>
+                <option>Altivo</option>
+                <option>Hiperfamiliar</option>
+                <option>Intrusivo</option>
+                <option>Suspicaz</option>
+                <option>Congraciante</option>
+                <option>Seductora</option>
+                <option>Hipersexual</option>
               </select>
             </div>
 
@@ -611,11 +729,7 @@ function MentalExamModal({
                 <option>Incoherente</option>
               </select>
             </div>
-          </div>
-        </div>
 
-        <div className="card">
-          <div className="formGrid">
             <div className="field">
               <div className="label">Estado de ánimo</div>
               <select className="select" value={animo} onChange={(e) => setAnimo(e.target.value)}>
@@ -632,7 +746,9 @@ function MentalExamModal({
               <select className="select" value={afecto} onChange={(e) => setAfecto(e.target.value)}>
                 <option>Congruente</option>
                 <option>Lábil</option>
-                <option>Plano</option>
+                <option>Aplanado</option>
+                <option>Inapropiado</option>
+                <option>Ambivalente</option>
                 <option>Incongruente</option>
               </select>
             </div>
@@ -648,12 +764,33 @@ function MentalExamModal({
             </div>
 
             <div className="field">
+              <div className="label">Nexos asociativos</div>
+              <select className="select" value={nexosAsociativos} onChange={(e) => setNexosAsociativos(e.target.value)}>
+                <option>Coherentes</option>
+                <option>Incoherentes</option>
+                <option>Asíndesis</option>
+              </select>
+            </div>
+
+            <div className="field">
+              <div className="label">Relevancia</div>
+              <select className="select" value={relevanciaPens} onChange={(e) => setRelevanciaPens(e.target.value)}>
+                <option>Relevante</option>
+                <option>Irrelevante</option>
+                <option>Circunstancial</option>
+                <option>Tangencial</option>
+              </select>
+            </div>
+
+            <div className="field">
               <div className="label">Percepción</div>
               <select className="select" value={percepcion} onChange={(e) => setPercepcion(e.target.value)}>
                 <option>Sin alteraciones</option>
                 <option>Alucinaciones</option>
                 <option>Ilusiones</option>
                 <option>Despersonalización</option>
+                <option>Pseudoalucinaciones</option>
+                <option>Alucinosis</option>
               </select>
             </div>
           </div>
@@ -681,6 +818,16 @@ function MentalExamModal({
             </div>
 
             <div className="field">
+              <div className="label">Sensorio</div>
+              <select className="select" value={sensorio} onChange={(e) => setSensorio(e.target.value)}>
+                <option>Alerta</option>
+                <option>Somnoliento</option>
+                <option>Estuporoso</option>
+                <option>Coma</option>
+              </select>
+            </div>
+
+            <div className="field">
               <div className="label">Atención</div>
               <select className="select" value={atencion} onChange={(e) => setAtencion(e.target.value)}>
                 <option>Conservada</option>
@@ -694,6 +841,22 @@ function MentalExamModal({
               <select className="select" value={memoria} onChange={(e) => setMemoria(e.target.value)}>
                 <option>Conservada</option>
                 <option>Alterada</option>
+              </select>
+            </div>
+
+            <div className="field">
+              <div className="label">Cálculo</div>
+              <select className="select" value={calculo} onChange={(e) => setCalculo(e.target.value)}>
+                <option>Eucalculia</option>
+                <option>Discalculia</option>
+              </select>
+            </div>
+
+            <div className="field">
+              <div className="label">Abstracción</div>
+              <select className="select" value={abstraccion} onChange={(e) => setAbstraccion(e.target.value)}>
+                <option>Abstrae</option>
+                <option>Concreto</option>
               </select>
             </div>
 
@@ -732,8 +895,55 @@ function MentalExamModal({
               className="textarea"
               value={obs}
               onChange={(e) => setObs(e.target.value)}
-              placeholder="Observaciones clínicas adicionales…"
+              placeholder="Observaciones clínicas adicionales (sensorio, juicio, riesgo, etc.)…"
             />
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="formGrid">
+            <div className="field">
+              <div className="label">Índice de actividad motora (cuantitativo)</div>
+              <select className="select" value={actividadCuant} onChange={(e) => setActividadCuant(e.target.value)}>
+                <option>Euquinético</option>
+                <option>Hiperquinético</option>
+                <option>Hipoquinético</option>
+              </select>
+            </div>
+
+            <div className="field">
+              <div className="label">Tono muscular</div>
+              <select className="select" value={tonoMuscular} onChange={(e) => setTonoMuscular(e.target.value)}>
+                <option>Normotónico</option>
+                <option>Hipertónico</option>
+                <option>Hipotónico</option>
+              </select>
+            </div>
+
+            <div className="field">
+              <div className="label">Posición / postura</div>
+              <select className="select" value={posicion} onChange={(e) => setPosicion(e.target.value)}>
+                <option>Postura habitual</option>
+                <option>Posturas estereotipadas</option>
+                <option>Inhibida</option>
+              </select>
+            </div>
+
+            <div className="field">
+              <div className="label">Movimientos</div>
+              <select className="select" value={movimientos} onChange={(e) => setMovimientos(e.target.value)}>
+                <option>Adaptativos</option>
+                <option>Tics</option>
+                <option>Temblores</option>
+                <option>Estereotipias</option>
+                <option>Gesticulaciones</option>
+                <option>Manierismos</option>
+                <option>Convulsiones</option>
+                <option>Bloqueo motriz</option>
+                <option>Parálisis</option>
+                <option>Compulsión</option>
+              </select>
+            </div>
           </div>
         </div>
       </div>
@@ -776,6 +986,7 @@ function NoteModal({
   const [animo, setAnimo] = useState("Eutímico");
   const [riesgo, setRiesgo] = useState("Sin riesgo");
   const [texto, setTexto] = useState("");
+  const [continuidad, setContinuidad] = useState("");
   const [transcripcion, setTranscripcion] = useState("");
 
   async function readBlobAsDataUrl(blob: Blob): Promise<string> {
@@ -832,6 +1043,7 @@ function NoteModal({
         estado_animo: animo,
         riesgo,
         texto: texto || null,
+        continuidad: continuidad || null,
         transcripcion: transcripcion || null,
         audio_data_url: audioUrl,
         patient_snapshot: {
@@ -887,6 +1099,16 @@ function NoteModal({
             value={texto}
             onChange={(e) => setTexto(e.target.value)}
             placeholder="Describe el seguimiento, cambios y observaciones..."
+          />
+        </div>
+
+        <div className="field">
+          <div className="label">Continuidad (plan de trabajo)</div>
+          <textarea
+            className="textarea"
+            value={continuidad}
+            onChange={(e) => setContinuidad(e.target.value)}
+            placeholder="Describa el plan de trabajo o continuidad clínica..."
           />
         </div>
 
@@ -1008,6 +1230,7 @@ function FilePreviewModal({
               {[
                 ["Estado de ánimo", meta?.estado_animo],
                 ["Riesgo", meta?.riesgo],
+                ["Plan de trabajo", meta?.continuidad],
               ].map(([label, value]) => (
                 <div key={label} className="previewItem">
                   <div className="k">{label}</div>
@@ -1079,6 +1302,18 @@ export default function App() {
     const photos = files.filter((f) => f.kind === "photo");
     return { attachments, exams, notes, photos };
   }, [files]);
+
+  const profileByPatient = useMemo(() => {
+    const map = new Map<string, { values: number[]; accent: string; label: string | null }>();
+    patients.forEach((patient) => {
+      const patientFiles = allFiles.filter((f) => f.patient_id === patient.id);
+      const { values, dominant } = getAxisValues(patientFiles);
+      const label = dominant?.label ?? null;
+      const accent = label ? PROFILE_COLORS[label] : "#c7a45a";
+      map.set(patient.id, { values, accent, label });
+    });
+    return map;
+  }, [patients, allFiles]);
 
   const profileByPatient = useMemo(() => {
     const map = new Map<string, { values: number[]; accent: string; label: string | null }>();
@@ -1268,7 +1503,7 @@ export default function App() {
             <div className="brandRow">
               <div className="brand">
                 <div className="title">
-                  <span>naju</span>
+                  <span>NAJU</span>
                   <span style={{ fontSize: 11, color: "var(--muted)" }}>gestor web</span>
                 </div>
                 <div className="subtitle">pacientes · exámenes · archivos (web)</div>
@@ -1640,6 +1875,21 @@ export default function App() {
           }}
         />
       ) : null}
+
+      {showNote && selected ? (
+        <NoteModal
+          patient={selected}
+          onClose={() => setShowNote(false)}
+          onCreated={async () => {
+            await refreshFiles(selected.id);
+            await refreshAllFiles();
+            pushToast({ type: "ok", msg: "Nota creada ✅" });
+            startVT(() => setSection("notas"));
+          }}
+        />
+      ) : null}
+
+      {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
 
       {showNote && selected ? (
         <NoteModal
