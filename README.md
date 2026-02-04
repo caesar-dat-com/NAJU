@@ -70,6 +70,20 @@ Rerquisitos: [Node.js](https://nodejs.org/) y [Rust](https://rustup.rs/) instala
 
 ---
 
+## 🧯 Solución de problemas comunes
+
+### Error: `Identifier 'profileByPatient' has already been declared`
+
+Este error sucede cuando existen **dos declaraciones** de `profileByPatient` en el mismo scope dentro de `src/App.tsx`. Para resolverlo:
+
+1. Abre `naju/src/App.tsx` y busca todas las apariciones de `profileByPatient`.
+2. Asegúrate de que **solo exista una** (o renombra una de ellas).
+3. Guarda y vuelve a ejecutar `npm run dev`.
+
+Si tu copia está actualizada, el bloque válido se llama `profileByPatientMap`.
+
+---
+
 ## ✨ Características Clave
 
 *   **Privacidad Local**: Todos los datos viven en tu máquina, nada en la nube.
