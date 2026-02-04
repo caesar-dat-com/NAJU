@@ -200,19 +200,65 @@ function getAxisValues(files: PatientFile[]) {
   return { values, dominant };
 }
 
+function scoreAxisValues(files: PatientFile[], mode: "aggregate" | "avg3" | "latest") {
+  if (files.length === 0) return AXES.map(() => 0);
+  const sorted = [...files].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const targetFiles =
+    mode === "latest" ? sorted.slice(0, 1) : mode === "avg3" ? sorted.slice(0, 3) : sorted;
+  const sums = AXES.map(() => 0);
+  const counts = AXES.map(() => 0);
+
+  targetFiles.forEach((file) => {
+    const meta = parseMetaJson(file);
+    if (!meta) return;
+    AXES.forEach((axis, idx) => {
+      const raw = meta[axis.key] ?? (axis.noteKey ? meta[axis.noteKey] : undefined);
+      if (!raw) return;
+      const value = scoreLookup(raw, axis.map);
+      sums[idx] += value;
+      counts[idx] += 1;
+    });
+  });
+
+  return sums.map((sum, idx) => (counts[idx] ? sum / counts[idx] : 0));
+}
+
+function buildEmotionCounts(files: PatientFile[]) {
+  const bucket = new Map<string, number>();
+  files.forEach((file) => {
+    const meta = parseMetaJson(file);
+    if (!meta) return;
+    const value = meta.estado_de_animo ?? meta.estado_animo;
+    if (!value) return;
+    bucket.set(value, (bucket.get(value) ?? 0) + 1);
+  });
+  const entries = Array.from(bucket.entries()).sort((a, b) => b[1] - a[1]);
+  return {
+    labels: entries.map(([label]) => label),
+    values: entries.map(([, count]) => count),
+  };
+}
+
+function isoToShortDate(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("es-CO", { day: "2-digit", month: "short", year: "numeric" });
+}
+
 function RadarChart({
   labels,
   values,
   accent,
+  max,
 }: {
   labels: string[];
   values: number[];
   accent: string;
+  max: number;
 }) {
   const size = 260;
   const center = size / 2;
   const radius = 90;
-  const max = 3;
   const points = values.map((value, i) => {
     const angle = (Math.PI * 2 * i) / values.length - Math.PI / 2;
     const r = (radius * value) / max;
@@ -223,8 +269,8 @@ function RadarChart({
     };
   });
   const polygon = points.map((p) => `${p.x},${p.y}`).join(" ");
-  const gridLevels = [1, 2, 3].map((level) => {
-    const r = (radius * level) / max;
+  const gridLevels = Array.from({ length: 5 }, (_, idx) => idx + 1).map((level) => {
+    const r = (radius * level) / 5;
     const ring = values.map((_, i) => {
       const angle = (Math.PI * 2 * i) / values.length - Math.PI / 2;
       return `${center + Math.cos(angle) * r},${center + Math.sin(angle) * r}`;
@@ -270,31 +316,43 @@ function useCanvasSize(canvas: HTMLCanvasElement | null) {
 }
 
 function ProgressDashes({
+  title,
   labels,
   values,
   max,
+  colors,
+  footer,
+  showScale = true,
 }: {
+  title?: string;
   labels: string[];
   values: number[];
   max: number;
+  colors?: Record<string, string>;
+  footer?: string;
+  showScale?: boolean;
 }) {
   const sum = values.reduce((acc, val) => acc + val, 0);
   return (
-    <div className="percentPanel">
-      <div className="percentTitle">Peso relativo (macro)</div>
+    <div className="percent-panel">
+      {title ? <h4>{title}</h4> : null}
       {labels.map((label, idx) => {
         const pct = sum === 0 ? 0 : (values[idx] / sum) * 100;
+        const barStyle = colors?.[label]
+          ? { width: `${pct}%`, background: colors[label] }
+          : { width: `${pct}%` };
         return (
-          <div key={label} className="percentRow">
-            <div className="percentLabel">{label}</div>
-            <div className="percentValue">{pct.toFixed(0)}%</div>
+          <div key={label} className="percent-row">
+            <div className="lbl">{label}</div>
+            <div className="pct">{pct.toFixed(0)}%</div>
             <div className="bar">
-              <span style={{ width: `${pct}%` }} />
+              <span style={barStyle} />
             </div>
           </div>
         );
       })}
-      <div className="percentFoot">Escala: 0–{max}</div>
+      {footer ? <div className="percentFoot">{footer}</div> : null}
+      {!footer && max && showScale ? <div className="percentFoot">Escala: 0–{max}</div> : null}
     </div>
   );
 }
@@ -323,86 +381,12 @@ function buildEvidence(files: PatientFile[], labels: string[]) {
 
 function TrendCanvas({
   labels,
-  values,
   files,
 }: {
   labels: string[];
-  values: number[];
   files: PatientFile[];
 }) {
-  const radarRef = useRef<HTMLCanvasElement | null>(null);
   const treeRef = useRef<HTMLCanvasElement | null>(null);
-  const maxScale = 10;
-
-  useEffect(() => {
-    const canvas = radarRef.current;
-    if (!canvas) return;
-    const size = useCanvasSize(canvas);
-    if (!size) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const { width, height } = size;
-    ctx.clearRect(0, 0, width, height);
-    const cx = width * 0.5;
-    const cy = height * 0.55;
-    const radius = Math.min(width, height) * 0.32;
-    const max = maxScale;
-
-    ctx.fillStyle = "rgba(0,0,0,0.04)";
-    ctx.fillRect(0, 0, width, height);
-
-    ctx.strokeStyle = "rgba(43,36,29,0.12)";
-    ctx.lineWidth = 1;
-    for (let r = 1; r <= 5; r++) {
-      const rr = (r / 5) * radius;
-      ctx.beginPath();
-      for (let i = 0; i < labels.length; i++) {
-        const ang = -Math.PI / 2 + (i * 2 * Math.PI) / labels.length;
-        const x = cx + Math.cos(ang) * rr;
-        const y = cy + Math.sin(ang) * rr;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.closePath();
-      ctx.stroke();
-    }
-
-    for (let i = 0; i < labels.length; i++) {
-      const ang = -Math.PI / 2 + (i * 2 * Math.PI) / labels.length;
-      const x = cx + Math.cos(ang) * radius;
-      const y = cy + Math.sin(ang) * radius;
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.lineTo(x, y);
-      ctx.stroke();
-    }
-
-    const scaled = values.map((v) => (v / 3) * maxScale);
-    ctx.beginPath();
-    scaled.forEach((v, i) => {
-      const ang = -Math.PI / 2 + (i * 2 * Math.PI) / labels.length;
-      const t = Math.max(0, Math.min(1, v / max));
-      const x = cx + Math.cos(ang) * radius * t;
-      const y = cy + Math.sin(ang) * radius * t;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.closePath();
-    ctx.fillStyle = "rgba(199,164,90,0.16)";
-    ctx.fill();
-    ctx.strokeStyle = "rgba(199,164,90,0.8)";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    ctx.fillStyle = "rgba(43,36,29,0.7)";
-    ctx.font = "12px ui-sans-serif, system-ui";
-    labels.forEach((label, i) => {
-      const ang = -Math.PI / 2 + (i * 2 * Math.PI) / labels.length;
-      const lx = cx + Math.cos(ang) * (radius + 18);
-      const ly = cy + Math.sin(ang) * (radius + 18);
-      ctx.fillText(label, lx - ctx.measureText(label).width / 2, ly);
-    });
-  }, [labels, values]);
 
   useEffect(() => {
     const canvas = treeRef.current;
@@ -417,17 +401,17 @@ function TrendCanvas({
     ctx.fillRect(0, 0, width, height);
 
     const evidence = buildEvidence(files, labels);
-    const root = { x: width * 0.16, y: height * 0.5 };
-    const col1 = width * 0.45;
-    const col2 = width * 0.78;
-    const ys = labels.map((_, i) => height * 0.18 + (i * height * 0.64) / (labels.length - 1));
+    const root = { x: width * 0.5, y: height * 0.12 };
+    const row1 = height * 0.48;
+    const row2 = height * 0.82;
+    const xs = labels.map((_, i) => width * 0.12 + (i * width * 0.76) / (labels.length - 1));
 
     ctx.strokeStyle = "rgba(199,164,90,0.35)";
     ctx.lineWidth = 1.5;
-    ys.forEach((y) => {
+    xs.forEach((x) => {
       ctx.beginPath();
-      ctx.moveTo(root.x + 20, root.y);
-      ctx.lineTo(col1 - 20, y);
+      ctx.moveTo(root.x, root.y + 18);
+      ctx.lineTo(x, row1 - 18);
       ctx.stroke();
     });
 
@@ -439,49 +423,42 @@ function TrendCanvas({
     ctx.stroke();
     ctx.fillStyle = "rgba(43,36,29,0.8)";
     ctx.font = "12px ui-sans-serif, system-ui";
-    ctx.fillText("Perfil global", root.x - 26, root.y - 24);
+    ctx.fillText("Perfil global", root.x - 30, root.y - 24);
 
     labels.forEach((label, idx) => {
-      const y = ys[idx];
+      const x = xs[idx];
       ctx.beginPath();
-      ctx.arc(col1, y, 14, 0, Math.PI * 2);
+      ctx.arc(x, row1, 14, 0, Math.PI * 2);
       ctx.fillStyle = "rgba(109,123,85,0.2)";
       ctx.fill();
       ctx.strokeStyle = "rgba(109,123,85,0.6)";
       ctx.stroke();
       ctx.fillStyle = "rgba(43,36,29,0.8)";
-      ctx.fillText(label, col1 + 18, y + 4);
+      ctx.fillText(label, x - ctx.measureText(label).width / 2, row1 + 28);
 
       const bucket = evidence[idx];
       const entries = Array.from(bucket.entries()).slice(0, 2);
       entries.forEach((entry, j) => {
         const [value] = entry;
-        const ly = y + (j === 0 ? -18 : 18);
+        const lx = x + (j === 0 ? -32 : 32);
         ctx.beginPath();
-        ctx.arc(col2, ly, 10, 0, Math.PI * 2);
+        ctx.arc(lx, row2, 10, 0, Math.PI * 2);
         ctx.fillStyle = "rgba(31,41,55,0.18)";
         ctx.fill();
         ctx.strokeStyle = "rgba(199,164,90,0.5)";
         ctx.stroke();
         ctx.fillStyle = "rgba(43,36,29,0.75)";
-        ctx.fillText(String(value), col2 + 16, ly + 4);
+        ctx.fillText(String(value), lx - ctx.measureText(String(value)).width / 2, row2 + 24);
         ctx.strokeStyle = "rgba(199,164,90,0.25)";
         ctx.beginPath();
-        ctx.moveTo(col1 + 14, y);
-        ctx.lineTo(col2 - 12, ly);
+        ctx.moveTo(x, row1 + 14);
+        ctx.lineTo(lx, row2 - 12);
         ctx.stroke();
       });
     });
   }, [labels, files]);
 
-  return (
-    <div className="trendGrid">
-      <div className="trendStack">
-        <canvas ref={radarRef} className="trendCanvas" aria-label="Radar de tendencias" />
-        <canvas ref={treeRef} className="trendCanvas treeCanvas" aria-label="Árbol de habilidades" />
-      </div>
-    </div>
-  );
+  return <canvas ref={treeRef} className="trendCanvas treeCanvas" aria-label="Árbol de tendencias" />;
 }
 
 function Modal({
@@ -1532,6 +1509,85 @@ export default function App() {
     return { attachments, exams, notes, photos };
   }, [files]);
 
+  const [timePreset, setTimePreset] = useState("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [includeExams, setIncludeExams] = useState(true);
+  const [includeNotes, setIncludeNotes] = useState(true);
+  const [calcMode, setCalcMode] = useState("aggregate");
+  const [focusRecord, setFocusRecord] = useState("");
+  const [scale, setScale] = useState("10");
+
+  const dateRange = useMemo(() => {
+    if (timePreset === "custom") {
+      const from = dateFrom ? new Date(dateFrom) : null;
+      const to = dateTo ? new Date(dateTo) : null;
+      return { from, to };
+    }
+    if (timePreset === "30d" || timePreset === "90d") {
+      const days = timePreset === "30d" ? 30 : 90;
+      const to = new Date();
+      const from = new Date();
+      from.setDate(from.getDate() - days);
+      return { from, to };
+    }
+    return { from: null, to: null };
+  }, [timePreset, dateFrom, dateTo]);
+
+  const trendFiles = useMemo(() => {
+    const selectedFiles: PatientFile[] = [];
+    if (includeExams) selectedFiles.push(...fileGroups.exams);
+    if (includeNotes) selectedFiles.push(...fileGroups.notes);
+    const filtered = selectedFiles.filter((file) => {
+      const created = new Date(file.created_at);
+      if (Number.isNaN(created.getTime())) return true;
+      if (dateRange.from && created < dateRange.from) return false;
+      if (dateRange.to && created > dateRange.to) return false;
+      return true;
+    });
+    return filtered.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  }, [includeExams, includeNotes, fileGroups.exams, fileGroups.notes, dateRange]);
+
+  const radarRawValues = useMemo(
+    () => scoreAxisValues(trendFiles, calcMode as "aggregate" | "avg3" | "latest"),
+    [trendFiles, calcMode]
+  );
+  const scaleMax = Number(scale);
+  const radarValues = useMemo(
+    () => radarRawValues.map((value) => (value / 3) * scaleMax),
+    [radarRawValues, scaleMax]
+  );
+  const radarSum = useMemo(() => radarValues.reduce((acc, val) => acc + val, 0), [radarValues]);
+  const dominantMacro = useMemo(() => {
+    let winner: { label: string; value: number } | null = null;
+    radarValues.forEach((value, idx) => {
+      if (!winner || value > winner.value) {
+        winner = { label: AXES[idx].label, value };
+      }
+    });
+    if (!winner || winner.value === 0) return null;
+    const pct = radarSum ? (winner.value / radarSum) * 100 : 0;
+    return { ...winner, pct };
+  }, [radarValues, radarSum]);
+
+  const emotionCounts = useMemo(() => buildEmotionCounts(trendFiles), [trendFiles]);
+
+  const focusOptions = useMemo(
+    () =>
+      trendFiles.map((file) => ({
+        value: file.id,
+        label: `${file.kind === "exam" ? "Examen" : "Nota"} · ${file.filename} · ${isoToShortDate(
+          file.created_at
+        )}`,
+      })),
+    [trendFiles]
+  );
+
+  const profileByPatientMap = useMemo(
+    () => buildProfileMap(patients, allFiles, getAxisValues, PROFILE_COLORS),
+    [patients, allFiles]
+  );
+
   const profileByPatientMap = useMemo(
     () => buildProfileMap(patients, allFiles, getAxisValues, PROFILE_COLORS),
     [patients, allFiles]
@@ -1663,6 +1719,17 @@ export default function App() {
     }
   }
 
+  function resetTrendFilters() {
+    setTimePreset("all");
+    setDateFrom("");
+    setDateTo("");
+    setIncludeExams(true);
+    setIncludeNotes(true);
+    setCalcMode("aggregate");
+    setFocusRecord("");
+    setScale("10");
+  }
+
   async function actionDeleteSelected() {
     if (!selected) return;
     const ok = confirm(`¿Eliminar a "${selected.name}"? Se eliminarán los datos locales guardados en este navegador.`);
@@ -1687,8 +1754,28 @@ export default function App() {
     return profileByPatientMap.get(selected.id) ?? { values: AXES.map(() => 0), accent: "#c7a45a", label: null };
   }, [profileByPatientMap, selected]);
   const profileLabels = useMemo(() => AXES.map((axis) => axis.label), []);
-  const profileValues = selectedProfile?.values ?? AXES.map(() => 0);
-  const evidenceFiles = useMemo(() => [...fileGroups.exams, ...fileGroups.notes], [fileGroups]);
+  const radarHint = useMemo(() => {
+    if (calcMode === "latest") return "Radar = último registro dentro del filtro";
+    if (calcMode === "avg3") return "Radar = promedio de los últimos 3 dentro del filtro";
+    return "Radar = promedio de todo lo filtrado";
+  }, [calcMode]);
+  const emotionColors = useMemo(() => {
+    const palette: Record<string, string> = {};
+    emotionCounts.labels.forEach((label, idx) => {
+      palette[label] = `hsla(${(idx * 70) % 360}, 85%, 62%, .95)`;
+    });
+    return palette;
+  }, [emotionCounts.labels]);
+  const emotionDominant = useMemo(() => {
+    if (!emotionCounts.values.length) return null;
+    const max = Math.max(...emotionCounts.values);
+    const idx = emotionCounts.values.findIndex((value) => value === max);
+    if (idx === -1) return null;
+    const pct = emotionCounts.values.reduce((acc, val) => acc + val, 0)
+      ? (emotionCounts.values[idx] / emotionCounts.values.reduce((acc, val) => acc + val, 0)) * 100
+      : 0;
+    return { label: emotionCounts.labels[idx], pct };
+  }, [emotionCounts]);
 
   return (
     <div
@@ -1921,23 +2008,203 @@ export default function App() {
                     <div>
                       <div style={{ fontWeight: 800 }}>Perfil del paciente</div>
                       <div style={{ color: "var(--muted)", fontSize: 13 }}>
-                        Radar basado en el último examen o nota registrada.
+                        Tendencias dinámicas con radar y árbol explicativo del filtro actual.
                       </div>
                     </div>
                     <span className="profileBadge">
-                      {selectedProfile?.label ? `Dominante: ${selectedProfile.label}` : "Perfil estable"}
+                      {dominantMacro ? `Dominante: ${dominantMacro.label}` : "Perfil estable"}
                     </span>
                   </div>
                   <div className="profileBody">
-                    <div className="profileGrid">
-                      <RadarChart
-                        labels={profileLabels}
-                        values={profileValues}
-                        accent={selectedProfile?.accent ?? "#c7a45a"}
-                      />
-                      <ProgressDashes labels={profileLabels} values={profileValues} max={3} />
+                    <div className="panel" style={{ gridColumn: "1 / -1" }}>
+                      <div className="hd">
+                        <h3>Resumen de tendencias (macro) + explicación (micro)</h3>
+                        <span className="pill" id="macroHint">
+                          {radarHint}
+                        </span>
+                      </div>
+                      <div className="bd">
+                        <div className="radar-wrap">
+                          <div className="stack">
+                            <div className="radarCanvasWrap">
+                              <RadarChart
+                                labels={profileLabels}
+                                values={radarValues}
+                                accent={selectedProfile?.accent ?? "#c7a45a"}
+                                max={scaleMax}
+                              />
+                            </div>
+                            <div className="miniHelp" id="treeHow">
+                              Árbol: raíz = resumen global · ramas = categorías macro · hojas = micro-evidencias
+                              (examen mental + notas) que explican la tendencia.
+                            </div>
+                            <TrendCanvas labels={profileLabels} files={trendFiles} />
+                          </div>
+
+                          <div className="controls">
+                            <div className="percent-panel">
+                              <h4>Filtros</h4>
+
+                              <div className="field">
+                                <label className="label" htmlFor="timePreset">
+                                  Rango de fechas
+                                </label>
+                                <select
+                                  id="timePreset"
+                                  value={timePreset}
+                                  onChange={(e) => setTimePreset(e.target.value)}
+                                  className="select"
+                                >
+                                  <option value="all">Histórico (todo)</option>
+                                  <option value="30d">Últimos 30 días</option>
+                                  <option value="90d">Últimos 90 días</option>
+                                  <option value="custom">Personalizado</option>
+                                </select>
+                              </div>
+
+                              <div className="row2" style={{ display: timePreset === "custom" ? "grid" : "none" }}>
+                                <div className="field">
+                                  <label className="label" htmlFor="dateFrom">
+                                    Desde
+                                  </label>
+                                  <input
+                                    id="dateFrom"
+                                    type="date"
+                                    value={dateFrom}
+                                    onChange={(e) => setDateFrom(e.target.value)}
+                                    className="input"
+                                  />
+                                </div>
+                                <div className="field">
+                                  <label className="label" htmlFor="dateTo">
+                                    Hasta
+                                  </label>
+                                  <input
+                                    id="dateTo"
+                                    type="date"
+                                    value={dateTo}
+                                    onChange={(e) => setDateTo(e.target.value)}
+                                    className="input"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="checks">
+                                <label>
+                                  <input
+                                    type="checkbox"
+                                    checked={includeExams}
+                                    onChange={(e) => setIncludeExams(e.target.checked)}
+                                  />{" "}
+                                  Exámenes
+                                </label>
+                                <label>
+                                  <input
+                                    type="checkbox"
+                                    checked={includeNotes}
+                                    onChange={(e) => setIncludeNotes(e.target.checked)}
+                                  />{" "}
+                                  Notas
+                                </label>
+                              </div>
+
+                              <div className="field">
+                                <label className="label" htmlFor="calcMode">
+                                  Cálculo del radar
+                                </label>
+                                <select
+                                  id="calcMode"
+                                  value={calcMode}
+                                  onChange={(e) => setCalcMode(e.target.value)}
+                                  className="select"
+                                >
+                                  <option value="aggregate">Agregado (promedio del filtro)</option>
+                                  <option value="avg3">Promedio últimos 3 (del filtro)</option>
+                                  <option value="latest">Último registro (del filtro)</option>
+                                </select>
+                              </div>
+
+                              <div className="field">
+                                <label className="label" htmlFor="focusRecord">
+                                  Comparar con un registro (archivo)
+                                </label>
+                                <select
+                                  id="focusRecord"
+                                  value={focusRecord}
+                                  onChange={(e) => setFocusRecord(e.target.value)}
+                                  className="select"
+                                >
+                                  <option value="">(sin comparación)</option>
+                                  {focusOptions.map((option) => (
+                                    <option key={option.value} value={option.value}>
+                                      {option.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <div className="field">
+                                <label className="label" htmlFor="scale">
+                                  Escala
+                                </label>
+                                <select
+                                  id="scale"
+                                  value={scale}
+                                  onChange={(e) => setScale(e.target.value)}
+                                  className="select"
+                                >
+                                  <option value="10">0 a 10</option>
+                                  <option value="5">0 a 5</option>
+                                </select>
+                              </div>
+
+                              <button className="pillBtn" onClick={resetTrendFilters} style={{ width: "100%" }}>
+                                reset filtros
+                              </button>
+                            </div>
+
+                            <ProgressDashes
+                              title="Peso relativo (macro)"
+                              labels={profileLabels}
+                              values={radarValues}
+                              max={scaleMax}
+                              colors={PROFILE_COLORS}
+                            />
+                            <div className="trendPillRow">
+                              <span className="pill">
+                                {dominantMacro
+                                  ? `Dominante: ${dominantMacro.label} (${dominantMacro.pct.toFixed(0)}%)`
+                                  : "Dominante: --"}
+                              </span>
+                              <span className="pill">Suma: {radarSum.toFixed(1)} (macro)</span>
+                            </div>
+
+                            {emotionDominant ? (
+                              <div className="trendPillRow">
+                                <span className="pill">
+                                  Predomina: {emotionDominant.label} ({emotionDominant.pct.toFixed(0)}%)
+                                </span>
+                              </div>
+                            ) : null}
+                            {emotionCounts.labels.length ? (
+                              <ProgressDashes
+                                title="Emoción predominante (tipo)"
+                                labels={emotionCounts.labels}
+                                values={emotionCounts.values}
+                                max={100}
+                                colors={emotionColors}
+                                showScale={false}
+                              />
+                            ) : (
+                              <div className="percent-panel">
+                                <h4>Emoción predominante (tipo)</h4>
+                                <div className="emptyHint">Sin datos de emoción en el filtro.</div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    <TrendCanvas labels={profileLabels} values={profileValues} files={evidenceFiles} />
                   </div>
                 </div>
               </>
@@ -2092,6 +2359,21 @@ export default function App() {
           }}
         />
       ) : null}
+
+      {showNote && selected ? (
+        <NoteModal
+          patient={selected}
+          onClose={() => setShowNote(false)}
+          onCreated={async () => {
+            await refreshFiles(selected.id);
+            await refreshAllFiles();
+            pushToast({ type: "ok", msg: "Nota creada ✅" });
+            startVT(() => setSection("notas"));
+          }}
+        />
+      ) : null}
+
+      {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
 
       {showNote && selected ? (
         <NoteModal
