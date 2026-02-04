@@ -1588,6 +1588,11 @@ export default function App() {
     [patients, allFiles]
   );
 
+  const profileByPatientMap = useMemo(
+    () => buildProfileMap(patients, allFiles, getAxisValues, PROFILE_COLORS),
+    [patients, allFiles]
+  );
+
   async function refreshPatients() {
     const list = await listPatients("");
     setPatients(list);
@@ -2354,6 +2359,21 @@ export default function App() {
           }}
         />
       ) : null}
+
+      {showNote && selected ? (
+        <NoteModal
+          patient={selected}
+          onClose={() => setShowNote(false)}
+          onCreated={async () => {
+            await refreshFiles(selected.id);
+            await refreshAllFiles();
+            pushToast({ type: "ok", msg: "Nota creada ✅" });
+            startVT(() => setSection("notas"));
+          }}
+        />
+      ) : null}
+
+      {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
 
       {showNote && selected ? (
         <NoteModal

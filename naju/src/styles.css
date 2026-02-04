@@ -965,16 +965,17 @@ textarea {
   color: #7b2f25;
 }
 
-/* Responsive layout for window resize */
-@media (max-width: 900px) {
-  .shell {
-    grid-template-columns: 1fr;
-    grid-template-rows: 360px 1fr;
-  }
+.profileCard {
+  margin-top: 12px;
+}
 
-  .sidebar {
-    border-radius: var(--r-xl);
-  }
+.profileHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
 
   .main {
     border-radius: var(--r-xl);
