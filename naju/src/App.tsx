@@ -256,6 +256,234 @@ function RadarChart({
   );
 }
 
+function useCanvasSize(canvas: HTMLCanvasElement | null) {
+  if (!canvas) return null;
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(1, Math.round(rect.width * dpr));
+  const height = Math.max(1, Math.round(rect.height * dpr));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+  return { width, height, dpr };
+}
+
+function ProgressDashes({
+  labels,
+  values,
+  max,
+}: {
+  labels: string[];
+  values: number[];
+  max: number;
+}) {
+  const sum = values.reduce((acc, val) => acc + val, 0);
+  return (
+    <div className="percentPanel">
+      <div className="percentTitle">Peso relativo (macro)</div>
+      {labels.map((label, idx) => {
+        const pct = sum === 0 ? 0 : (values[idx] / sum) * 100;
+        return (
+          <div key={label} className="percentRow">
+            <div className="percentLabel">{label}</div>
+            <div className="percentValue">{pct.toFixed(0)}%</div>
+            <div className="bar">
+              <span style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+        );
+      })}
+      <div className="percentFoot">Escala: 0–{max}</div>
+    </div>
+  );
+}
+
+function buildEvidence(files: PatientFile[], labels: string[]) {
+  const evidence = labels.map(() => new Map<string, number>());
+  files.forEach((file) => {
+    const meta = parseMetaJson(file);
+    if (!meta) return;
+    const values = [
+      meta.estado_de_animo ?? meta.estado_animo,
+      meta.afecto,
+      meta.orientacion,
+      meta.memoria,
+      meta.juicio,
+      meta.riesgo,
+    ];
+    values.forEach((value, idx) => {
+      if (!value) return;
+      const bucket = evidence[idx];
+      bucket.set(value, (bucket.get(value) ?? 0) + 1);
+    });
+  });
+  return evidence;
+}
+
+function TrendCanvas({
+  labels,
+  values,
+  files,
+}: {
+  labels: string[];
+  values: number[];
+  files: PatientFile[];
+}) {
+  const radarRef = useRef<HTMLCanvasElement | null>(null);
+  const treeRef = useRef<HTMLCanvasElement | null>(null);
+  const maxScale = 10;
+
+  useEffect(() => {
+    const canvas = radarRef.current;
+    if (!canvas) return;
+    const size = useCanvasSize(canvas);
+    if (!size) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const { width, height } = size;
+    ctx.clearRect(0, 0, width, height);
+    const cx = width * 0.5;
+    const cy = height * 0.55;
+    const radius = Math.min(width, height) * 0.32;
+    const max = maxScale;
+
+    ctx.fillStyle = "rgba(0,0,0,0.04)";
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.strokeStyle = "rgba(43,36,29,0.12)";
+    ctx.lineWidth = 1;
+    for (let r = 1; r <= 5; r++) {
+      const rr = (r / 5) * radius;
+      ctx.beginPath();
+      for (let i = 0; i < labels.length; i++) {
+        const ang = -Math.PI / 2 + (i * 2 * Math.PI) / labels.length;
+        const x = cx + Math.cos(ang) * rr;
+        const y = cy + Math.sin(ang) * rr;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    }
+
+    for (let i = 0; i < labels.length; i++) {
+      const ang = -Math.PI / 2 + (i * 2 * Math.PI) / labels.length;
+      const x = cx + Math.cos(ang) * radius;
+      const y = cy + Math.sin(ang) * radius;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    }
+
+    const scaled = values.map((v) => (v / 3) * maxScale);
+    ctx.beginPath();
+    scaled.forEach((v, i) => {
+      const ang = -Math.PI / 2 + (i * 2 * Math.PI) / labels.length;
+      const t = Math.max(0, Math.min(1, v / max));
+      const x = cx + Math.cos(ang) * radius * t;
+      const y = cy + Math.sin(ang) * radius * t;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+    ctx.fillStyle = "rgba(199,164,90,0.16)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(199,164,90,0.8)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(43,36,29,0.7)";
+    ctx.font = "12px ui-sans-serif, system-ui";
+    labels.forEach((label, i) => {
+      const ang = -Math.PI / 2 + (i * 2 * Math.PI) / labels.length;
+      const lx = cx + Math.cos(ang) * (radius + 18);
+      const ly = cy + Math.sin(ang) * (radius + 18);
+      ctx.fillText(label, lx - ctx.measureText(label).width / 2, ly);
+    });
+  }, [labels, values]);
+
+  useEffect(() => {
+    const canvas = treeRef.current;
+    if (!canvas) return;
+    const size = useCanvasSize(canvas);
+    if (!size) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const { width, height } = size;
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = "rgba(0,0,0,0.04)";
+    ctx.fillRect(0, 0, width, height);
+
+    const evidence = buildEvidence(files, labels);
+    const root = { x: width * 0.16, y: height * 0.5 };
+    const col1 = width * 0.45;
+    const col2 = width * 0.78;
+    const ys = labels.map((_, i) => height * 0.18 + (i * height * 0.64) / (labels.length - 1));
+
+    ctx.strokeStyle = "rgba(199,164,90,0.35)";
+    ctx.lineWidth = 1.5;
+    ys.forEach((y) => {
+      ctx.beginPath();
+      ctx.moveTo(root.x + 20, root.y);
+      ctx.lineTo(col1 - 20, y);
+      ctx.stroke();
+    });
+
+    ctx.fillStyle = "rgba(199,164,90,0.2)";
+    ctx.beginPath();
+    ctx.arc(root.x, root.y, 18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(199,164,90,0.8)";
+    ctx.stroke();
+    ctx.fillStyle = "rgba(43,36,29,0.8)";
+    ctx.font = "12px ui-sans-serif, system-ui";
+    ctx.fillText("Perfil global", root.x - 26, root.y - 24);
+
+    labels.forEach((label, idx) => {
+      const y = ys[idx];
+      ctx.beginPath();
+      ctx.arc(col1, y, 14, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(109,123,85,0.2)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(109,123,85,0.6)";
+      ctx.stroke();
+      ctx.fillStyle = "rgba(43,36,29,0.8)";
+      ctx.fillText(label, col1 + 18, y + 4);
+
+      const bucket = evidence[idx];
+      const entries = Array.from(bucket.entries()).slice(0, 2);
+      entries.forEach((entry, j) => {
+        const [value] = entry;
+        const ly = y + (j === 0 ? -18 : 18);
+        ctx.beginPath();
+        ctx.arc(col2, ly, 10, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(31,41,55,0.18)";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(199,164,90,0.5)";
+        ctx.stroke();
+        ctx.fillStyle = "rgba(43,36,29,0.75)";
+        ctx.fillText(String(value), col2 + 16, ly + 4);
+        ctx.strokeStyle = "rgba(199,164,90,0.25)";
+        ctx.beginPath();
+        ctx.moveTo(col1 + 14, y);
+        ctx.lineTo(col2 - 12, ly);
+        ctx.stroke();
+      });
+    });
+  }, [labels, files]);
+
+  return (
+    <div className="trendGrid">
+      <div className="trendStack">
+        <canvas ref={radarRef} className="trendCanvas" aria-label="Radar de tendencias" />
+        <canvas ref={treeRef} className="trendCanvas treeCanvas" aria-label="Árbol de habilidades" />
+      </div>
+    </div>
+  );
+}
+
 function Modal({
   title,
   subtitle,
@@ -1309,8 +1537,6 @@ export default function App() {
     [patients, allFiles]
   );
 
-
-
   async function refreshPatients() {
     const list = await listPatients("");
     setPatients(list);
@@ -1460,6 +1686,9 @@ export default function App() {
     if (!selected) return null;
     return profileByPatientMap.get(selected.id) ?? { values: AXES.map(() => 0), accent: "#c7a45a", label: null };
   }, [profileByPatientMap, selected]);
+  const profileLabels = useMemo(() => AXES.map((axis) => axis.label), []);
+  const profileValues = selectedProfile?.values ?? AXES.map(() => 0);
+  const evidenceFiles = useMemo(() => [...fileGroups.exams, ...fileGroups.notes], [fileGroups]);
 
   return (
     <div
@@ -1700,11 +1929,15 @@ export default function App() {
                     </span>
                   </div>
                   <div className="profileBody">
-                    <RadarChart
-                      labels={AXES.map((axis) => axis.label)}
-                      values={selectedProfile?.values ?? AXES.map(() => 0)}
-                      accent={selectedProfile?.accent ?? "#c7a45a"}
-                    />
+                    <div className="profileGrid">
+                      <RadarChart
+                        labels={profileLabels}
+                        values={profileValues}
+                        accent={selectedProfile?.accent ?? "#c7a45a"}
+                      />
+                      <ProgressDashes labels={profileLabels} values={profileValues} max={3} />
+                    </div>
+                    <TrendCanvas labels={profileLabels} values={profileValues} files={evidenceFiles} />
                   </div>
                 </div>
               </>
@@ -1859,96 +2092,6 @@ export default function App() {
           }}
         />
       ) : null}
-
-      {showNote && selected ? (
-        <NoteModal
-          patient={selected}
-          onClose={() => setShowNote(false)}
-          onCreated={async () => {
-            await refreshFiles(selected.id);
-            await refreshAllFiles();
-            pushToast({ type: "ok", msg: "Nota creada ✅" });
-            startVT(() => setSection("notas"));
-          }}
-        />
-      ) : null}
-
-      {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
-
-      {showNote && selected ? (
-        <NoteModal
-          patient={selected}
-          onClose={() => setShowNote(false)}
-          onCreated={async () => {
-            await refreshFiles(selected.id);
-            await refreshAllFiles();
-            pushToast({ type: "ok", msg: "Nota creada ✅" });
-            startVT(() => setSection("notas"));
-          }}
-        />
-      ) : null}
-
-      {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
-
-      {showNote && selected ? (
-        <NoteModal
-          patient={selected}
-          onClose={() => setShowNote(false)}
-          onCreated={async () => {
-            await refreshFiles(selected.id);
-            await refreshAllFiles();
-            pushToast({ type: "ok", msg: "Nota creada ✅" });
-            startVT(() => setSection("notas"));
-          }}
-        />
-      ) : null}
-
-      {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
-
-      {showNote && selected ? (
-        <NoteModal
-          patient={selected}
-          onClose={() => setShowNote(false)}
-          onCreated={async () => {
-            await refreshFiles(selected.id);
-            await refreshAllFiles();
-            pushToast({ type: "ok", msg: "Nota creada ✅" });
-            startVT(() => setSection("notas"));
-          }}
-        />
-      ) : null}
-
-      {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
-
-      {showNote && selected ? (
-        <NoteModal
-          patient={selected}
-          onClose={() => setShowNote(false)}
-          onCreated={async () => {
-            await refreshFiles(selected.id);
-            await refreshAllFiles();
-            pushToast({ type: "ok", msg: "Nota creada ✅" });
-            startVT(() => setSection("notas"));
-          }}
-        />
-      ) : null}
-
-      {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
-
-      {showNote && selected ? (
-        <NoteModal
-          patient={selected}
-          onClose={() => setShowNote(false)}
-          onCreated={async () => {
-            await refreshFiles(selected.id);
-            await refreshAllFiles();
-            pushToast({ type: "ok", msg: "Nota creada ✅" });
-            startVT(() => setSection("notas"));
-          }}
-        />
-      ) : null}
-
-      {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
 
       {showNote && selected ? (
         <NoteModal
