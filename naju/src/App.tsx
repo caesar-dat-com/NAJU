@@ -15,6 +15,7 @@ import {
   setPatientPhoto,
   updatePatient,
 } from "./lib/api";
+import { buildProfileMap } from "./lib/profile";
 
 type Section = "resumen" | "examenes" | "notas" | "archivos";
 
@@ -94,18 +95,6 @@ function isPdf(path: string) {
 function scoreLookup(value: string | null | undefined, map: Record<string, number>) {
   if (!value) return 0;
   return map[value] ?? 0;
-}
-
-function buildProfileMap(patients: Patient[], allFiles: PatientFile[]) {
-  const map = new Map<string, { values: number[]; accent: string; label: string | null }>();
-  patients.forEach((patient) => {
-    const patientFiles = allFiles.filter((f) => f.patient_id === patient.id);
-    const { values, dominant } = getAxisValues(patientFiles);
-    const label = dominant?.label ?? null;
-    const accent = label ? PROFILE_COLORS[label] : "#c7a45a";
-    map.set(patient.id, { values, accent, label });
-  });
-  return map;
 }
 
 const AXES = [
@@ -1315,6 +1304,11 @@ export default function App() {
     return { attachments, exams, notes, photos };
   }, [files]);
 
+  const profileByPatientMap = useMemo(
+    () => buildProfileMap(patients, allFiles, getAxisValues, PROFILE_COLORS),
+    [patients, allFiles]
+  );
+
   const profileByPatientId = useMemo(() => buildProfileMap(patients, allFiles), [patients, allFiles]);
 
   const profileByPatientId = useMemo(() => {
@@ -1524,8 +1518,8 @@ export default function App() {
 
   const selectedProfile = useMemo(() => {
     if (!selected) return null;
-    return profileByPatientId.get(selected.id) ?? { values: AXES.map(() => 0), accent: "#c7a45a", label: null };
-  }, [profileByPatientId, selected]);
+    return profileByPatientMap.get(selected.id) ?? { values: AXES.map(() => 0), accent: "#c7a45a", label: null };
+  }, [profileByPatientMap, selected]);
 
   return (
     <div
@@ -1589,7 +1583,7 @@ export default function App() {
             {filtered.map((p) => {
               const age = calcAge(p.birth_date);
               const img = p.photo_path ?? null;
-              const profile = profileByPatientId.get(p.id);
+              const profile = profileByPatientMap.get(p.id);
 
               return (
                 <div
@@ -1925,6 +1919,21 @@ export default function App() {
           }}
         />
       ) : null}
+
+      {showNote && selected ? (
+        <NoteModal
+          patient={selected}
+          onClose={() => setShowNote(false)}
+          onCreated={async () => {
+            await refreshFiles(selected.id);
+            await refreshAllFiles();
+            pushToast({ type: "ok", msg: "Nota creada ✅" });
+            startVT(() => setSection("notas"));
+          }}
+        />
+      ) : null}
+
+      {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
 
       {showNote && selected ? (
         <NoteModal
