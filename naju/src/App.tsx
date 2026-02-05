@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./styles.css";
+import { appointmentsToCsv, appointmentsToIcs, downloadTextFile } from "./lib/export";
 import {
   Patient,
   PatientFile,
@@ -14,10 +15,15 @@ import {
   listPatients,
   setPatientPhoto,
   updatePatient,
+  Appointment,
+  AppointmentInput,
+  createAppointment,
+  deleteAppointment,
+  listAppointments,
 } from "./lib/api";
 import { buildProfileMap } from "./lib/profile";
 
-type Section = "resumen" | "examenes" | "notas" | "archivos";
+type Section = "resumen" | "examenes" | "notas" | "citas" | "archivos";
 
 type Toast = { type: "ok" | "err"; msg: string } | null;
 
@@ -92,6 +98,127 @@ function isPdf(path: string) {
   return path.startsWith("data:application/pdf") || /\.pdf$/i.test(path);
 }
 
+
+
+// --- Audio transcription + asset persistence (dev) ---
+let asrPipelinePromise: Promise<any> | null = null;
+
+async function getAsrPipeline() {
+  if (asrPipelinePromise) return asrPipelinePromise;
+  asrPipelinePromise = (async () => {
+    const mod: any = await import("@xenova/transformers");
+    const pipeline = mod?.pipeline;
+    const env = mod?.env;
+    if (env) {
+      env.allowLocalModels = false;
+      env.useBrowserCache = true;
+    }
+    return pipeline("automatic-speech-recognition", "Xenova/whisper-tiny", { quantized: true });
+  })();
+  return asrPipelinePromise;
+}
+
+async function decodeAudioToMono16k(blob: Blob): Promise<{ array: Float32Array; sampling_rate: number }> {
+  const ab = await blob.arrayBuffer();
+  const AC: any = (window as any).AudioContext || (window as any).webkitAudioContext;
+  if (!AC) throw new Error("AudioContext no disponible en este navegador.");
+  const ctx = new AC();
+  let decoded: AudioBuffer;
+  try {
+    decoded = await ctx.decodeAudioData(ab.slice(0));
+  } finally {
+    try {
+      await ctx.close();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const n = decoded.numberOfChannels;
+  const ch0 = decoded.getChannelData(0);
+  let mono: Float32Array;
+  if (n === 1) {
+    mono = new Float32Array(ch0);
+  } else {
+    const out = new Float32Array(decoded.length);
+    for (let i = 0; i < decoded.length; i++) {
+      let sum = 0;
+      for (let c = 0; c < n; c++) sum += decoded.getChannelData(c)[i] ?? 0;
+      out[i] = sum / n;
+    }
+    mono = out;
+  }
+
+  const srcRate = decoded.sampleRate;
+  if (srcRate === 16000) return { array: mono, sampling_rate: 16000 };
+
+  const length = Math.max(1, Math.round(decoded.duration * 16000));
+  const offline = new OfflineAudioContext(1, length, 16000);
+  const buf = offline.createBuffer(1, mono.length, srcRate);
+  buf.copyToChannel(mono, 0);
+  const src = offline.createBufferSource();
+  src.buffer = buf;
+  src.connect(offline.destination);
+  src.start(0);
+  const rendered = await offline.startRendering();
+  return { array: new Float32Array(rendered.getChannelData(0)), sampling_rate: 16000 };
+}
+
+function arrayBufferToBase64(buf: ArrayBuffer) {
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+function safeFilename(name: string, fallbackExt = "webm") {
+  const base = (name || "").trim();
+  const cleaned = base
+    .replace(/[^\w.\-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (cleaned) return cleaned;
+  return `audio-${Date.now()}.${fallbackExt}`;
+}
+
+function guessExt(file: File) {
+  const fromName = (file.name || "").split(".").pop()?.toLowerCase();
+  if (fromName && fromName.length <= 6) return fromName;
+  const t = (file.type || "").toLowerCase();
+  if (t.includes("wav")) return "wav";
+  if (t.includes("mpeg") || t.includes("mp3")) return "mp3";
+  if (t.includes("ogg")) return "ogg";
+  if (t.includes("webm")) return "webm";
+  if (t.includes("mp4")) return "m4a";
+  return "webm";
+}
+
+async function trySaveAudioAsset(patientId: string, file: File): Promise<string | null> {
+  try {
+    const ext = guessExt(file);
+    const filename = safeFilename(file.name, ext);
+    const b64 = arrayBufferToBase64(await file.arrayBuffer());
+    const res = await fetch("/__naju_asset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        patientId,
+        filename,
+        contentType: file.type || "application/octet-stream",
+        dataBase64: b64,
+      }),
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    if (j?.ok && typeof j?.path === "string") return j.path;
+  } catch {
+    // ignore
+  }
+  return null;
+}
 function scoreLookup(value: string | null | undefined, map: Record<string, number>) {
   if (!value) return 0;
   return map[value] ?? 0;
@@ -1939,11 +2066,17 @@ function NoteModal({
   onCreated: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
+
   const [recording, setRecording] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioFile, setAudioFile] = useState<File | null>(null);
   const [audioError, setAudioError] = useState<string | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const audioInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [transcribing, setTranscribing] = useState(false);
+  const [transcribeError, setTranscribeError] = useState<string | null>(null);
 
   const [fecha, setFecha] = useState<string>(() => {
     const d = new Date();
@@ -1958,6 +2091,18 @@ function NoteModal({
   const [continuidad, setContinuidad] = useState("");
   const [transcripcion, setTranscripcion] = useState("");
 
+  useEffect(() => {
+    return () => {
+      if (audioUrl && audioUrl.startsWith("blob:")) {
+        try {
+          URL.revokeObjectURL(audioUrl);
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+  }, [audioUrl]);
+
   async function readBlobAsDataUrl(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -1967,54 +2112,147 @@ function NoteModal({
     });
   }
 
+  function actionPickAudio() {
+    audioInputRef.current?.click();
+  }
+
+  function clearAudioSelection() {
+    setAudioError(null);
+    setTranscribeError(null);
+    setAudioFile(null);
+    setAudioUrl(null);
+    try {
+      if (audioInputRef.current) audioInputRef.current.value = "";
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function onAudioSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null;
+    if (!file) return;
+    setAudioError(null);
+    setTranscribeError(null);
+    setAudioFile(file);
+    try {
+      const url = URL.createObjectURL(file);
+      setAudioUrl(url);
+    } catch {
+      // fallback: if object URL fails, keep it null (we can still save/transcribe)
+      setAudioUrl(null);
+    }
+  }
+
   async function toggleRecording() {
     if (recording) {
       recorderRef.current?.stop();
       setRecording(false);
       return;
     }
+
     try {
       setAudioError(null);
+      setTranscribeError(null);
+
       if (!navigator.mediaDevices?.getUserMedia) {
         setAudioError("Grabación no disponible en este navegador.");
         return;
       }
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
       recorderRef.current = recorder;
       chunksRef.current = [];
+
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data);
       };
+
       recorder.onstop = async () => {
         const blob = new Blob(chunksRef.current, { type: "audio/webm" });
         stream.getTracks().forEach((track) => track.stop());
+
         try {
-          const dataUrl = await readBlobAsDataUrl(blob);
-          setAudioUrl(dataUrl);
+          const ext = "webm";
+          const file = new File([blob], `grabacion-${fecha}-${Date.now()}.${ext}`, {
+            type: blob.type || "audio/webm",
+          });
+
+          setAudioFile(file);
+          try {
+            const url = URL.createObjectURL(blob);
+            setAudioUrl(url);
+          } catch {
+            const dataUrl = await readBlobAsDataUrl(blob);
+            setAudioUrl(dataUrl);
+          }
         } catch (err) {
           setAudioError(err instanceof Error ? err.message : "No se pudo procesar el audio.");
         }
       };
+
       recorder.start();
       setRecording(true);
-    } catch (err) {
+    } catch {
       setAudioError("No se pudo iniciar la grabación.");
+    }
+  }
+
+  async function transcribeAudio() {
+    if (!audioFile) {
+      setTranscribeError("Primero selecciona o graba un audio.");
+      return;
+    }
+
+    setTranscribing(true);
+    setTranscribeError(null);
+
+    try {
+      const audio = await decodeAudioToMono16k(audioFile);
+      const asr = await getAsrPipeline();
+
+      const out = await asr(audio, {
+        // Nota: chunking ayuda con audios medianos/largos
+        chunk_length_s: 30,
+        stride_length_s: 5,
+        // Whisper suele inferir idioma; pero intentamos guiarlo
+        language: "spanish",
+        task: "transcribe",
+      });
+
+      const txt = typeof out === "string" ? out : out?.text;
+      if (!txt || !String(txt).trim()) {
+        setTranscribeError("No se obtuvo texto de la transcripción.");
+        return;
+      }
+
+      setTranscripcion(String(txt).trim());
+    } catch (err) {
+      setTranscribeError(errMsg(err));
+    } finally {
+      setTranscribing(false);
     }
   }
 
   async function create() {
     setBusy(true);
     try {
+      let audioRef: string | null = null;
+      if (audioFile) {
+        // Prefer: guardar como archivo real (dev). Fallback: incrustar como DataURL.
+        const savedPath = await trySaveAudioAsset(patient.id, audioFile);
+        audioRef = savedPath || (await readBlobAsDataUrl(audioFile));
+      }
+
       const payload = {
         type: "nota",
         fecha,
         estado_animo: animo,
         riesgo,
-        texto: texto || null,
-        continuidad: continuidad || null,
-        transcripcion: transcripcion || null,
-        audio_data_url: audioUrl,
+        texto: texto.trim() ? texto.trim() : null,
+        continuidad: continuidad.trim() ? continuidad.trim() : null,
+        transcripcion: transcripcion.trim() ? transcripcion.trim() : null,
+        audio_data_url: audioRef,
         patient_snapshot: {
           id: patient.id,
           name: patient.name,
@@ -2022,6 +2260,7 @@ function NoteModal({
           doc_number: patient.doc_number,
         },
       };
+
       await createPatientNote(patient.id, payload);
       await onCreated();
       onClose();
@@ -2030,9 +2269,19 @@ function NoteModal({
     }
   }
 
+  const canSave = Boolean(texto.trim() || transcripcion.trim() || audioFile);
+
   return (
     <Modal title="Nueva nota" subtitle="Registro rápido del seguimiento clínico." onClose={onClose}>
       <div className="modalBody">
+        <input
+          ref={audioInputRef}
+          type="file"
+          accept="audio/*"
+          onChange={onAudioSelected}
+          style={{ display: "none" }}
+        />
+
         <div className="formGrid">
           <div className="field">
             <div className="label">Fecha</div>
@@ -2087,28 +2336,38 @@ function NoteModal({
             className="textarea"
             value={transcripcion}
             onChange={(e) => setTranscripcion(e.target.value)}
-            placeholder="Pega aquí una transcripción o dicta manualmente."
+            placeholder="Pega aquí una transcripción o usa el botón de transcribir."
           />
         </div>
 
         <div className="audioRow">
-          <button className={`pillBtn ${recording ? "danger" : ""}`} onClick={toggleRecording} type="button">
+          <button className="pillBtn" onClick={actionPickAudio} type="button" disabled={busy || transcribing || recording}>
+            Cargar audio
+          </button>
+          <button className={`pillBtn ${recording ? "danger" : ""}`} onClick={toggleRecording} type="button" disabled={busy || transcribing}>
             {recording ? "Detener grabación" : "Grabar audio"}
           </button>
-          {audioUrl ? <span className="audioStatus">Audio listo para guardarse.</span> : null}
+          <button className="pillBtn primary" onClick={transcribeAudio} type="button" disabled={!audioFile || busy || transcribing}>
+            {transcribing ? "Transcribiendo..." : "Transcribir audio"}
+          </button>
+          {audioFile ? <span className="audioStatus">Audio seleccionado: {audioFile.name}</span> : null}
           {audioError ? <span className="audioError">{audioError}</span> : null}
+          {transcribeError ? <span className="audioError">{transcribeError}</span> : null}
+          {audioFile ? (
+            <button className="pillBtn" type="button" onClick={clearAudioSelection} disabled={busy || transcribing || recording}>
+              Quitar audio
+            </button>
+          ) : null}
         </div>
 
-        {audioUrl ? (
-          <audio controls src={audioUrl} style={{ width: "100%" }} />
-        ) : null}
+        {audioUrl ? <audio controls src={audioUrl} style={{ width: "100%" }} /> : null}
       </div>
 
       <div className="modalFooter">
         <button className="pillBtn" onClick={onClose} disabled={busy}>
           Cancelar
         </button>
-        <button className="pillBtn primary" onClick={create} disabled={busy || !texto.trim()}>
+        <button className="pillBtn primary" onClick={create} disabled={busy || !canSave}>
           {busy ? "Guardando..." : "Guardar nota"}
         </button>
       </div>
@@ -2224,6 +2483,359 @@ function FilePreviewModal({
   );
 }
 
+
+type AgendaViewProps = {
+  appointments: Appointment[];
+  patients: Patient[];
+  monthCursor: Date;
+  setMonthCursor: (d: Date) => void;
+  dayKey: string | null;
+  setDayKey: (k: string | null) => void;
+  onJumpToPatient: (patientId: string) => void;
+  onExportAll: () => void;
+  onExportAllCsv: () => void;
+};
+
+function toDayKeyLocal(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function monthLabel(d: Date) {
+  try {
+    return d.toLocaleString(undefined, { month: "long", year: "numeric" });
+  } catch {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  }
+}
+
+function buildMonthGrid(monthCursor: Date) {
+  const first = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), 1);
+  const start = new Date(first);
+  const dow = (start.getDay() + 6) % 7; // monday=0
+  start.setDate(start.getDate() - dow);
+
+  const last = new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 0);
+  const end = new Date(last);
+  const dowEnd = (end.getDay() + 6) % 7;
+  end.setDate(end.getDate() + (6 - dowEnd));
+
+  const days: Date[] = [];
+  const cur = new Date(start);
+  while (cur <= end) {
+    days.push(new Date(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return { days };
+}
+
+function AgendaView(props: AgendaViewProps) {
+  const { appointments, patients, monthCursor, setMonthCursor, dayKey, setDayKey, onJumpToPatient, onExportAll, onExportAllCsv } = props;
+
+  const patientName: Record<string, string> = useMemo(() => {
+    const m: Record<string, string> = {};
+    patients.forEach((p) => (m[p.id] = p.name));
+    return m;
+  }, [patients]);
+
+  const apptByDay = useMemo(() => {
+    const m: Record<string, Appointment[]> = {};
+    appointments.forEach((a) => {
+      const d = new Date(a.start_iso);
+      if (Number.isNaN(d.getTime())) return;
+      const k = toDayKeyLocal(d);
+      (m[k] ||= []).push(a);
+    });
+    Object.keys(m).forEach((k) => m[k].sort((x, y) => Date.parse(x.start_iso) - Date.parse(y.start_iso)));
+    return m;
+  }, [appointments]);
+
+  const { days } = useMemo(() => buildMonthGrid(monthCursor), [monthCursor]);
+
+  const selectedList = useMemo(() => {
+    if (!dayKey) return [];
+    return (apptByDay[dayKey] || []).slice();
+  }, [apptByDay, dayKey]);
+
+  const upcoming = useMemo(() => {
+    const now = Date.now();
+    return appointments
+      .filter((a) => Date.parse(a.end_iso) >= now - 2 * 60 * 60 * 1000)
+      .slice()
+      .sort((x, y) => Date.parse(x.start_iso) - Date.parse(y.start_iso))
+      .slice(0, 30);
+  }, [appointments]);
+
+  function fmt(iso: string) {
+    try {
+      return new Date(iso).toLocaleString();
+    } catch {
+      return iso;
+    }
+  }
+
+  return (
+    <div className="grid2">
+      <div className="card">
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+          <div>
+            <div style={{ fontWeight: 900 }}>Calendario</div>
+            <div style={{ color: "var(--muted)", fontSize: 13 }}>Clic en un día para ver sus citas.</div>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <button className="pillBtn" onClick={() => setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() - 1, 1))}>
+              ◀
+            </button>
+            <div className="najuMonthPill">{monthLabel(monthCursor)}</div>
+            <button className="pillBtn" onClick={() => setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1))}>
+              ▶
+            </button>
+            <button className="pillBtn primary" onClick={onExportAll}>
+              Exportar .ics
+            </button>
+            <button className="pillBtn" onClick={onExportAllCsv}>
+              Exportar CSV
+            </button>
+          </div>
+        </div>
+
+        <div style={{ height: 12 }} />
+
+        <div className="najuCalHead">
+          {["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"].map((d) => (
+            <div key={d} className="najuCalDow">
+              {d}
+            </div>
+          ))}
+        </div>
+
+        <div className="najuCalGrid">
+          {days.map((d) => {
+            const k = toDayKeyLocal(d);
+            const count = (apptByDay[k] || []).length;
+            const inMonth = d.getMonth() === monthCursor.getMonth();
+            const isSel = dayKey === k;
+            return (
+              <button
+                key={k}
+                className={"najuCalCell " + (inMonth ? "" : "isDim ") + (isSel ? "isSel" : "")}
+                onClick={() => setDayKey(isSel ? null : k)}
+                title={k}
+              >
+                <div className="najuCalNum">{d.getDate()}</div>
+                {count ? <div className="najuCalCount">{count}</div> : null}
+              </button>
+            );
+          })}
+        </div>
+
+        {dayKey ? (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+              <div style={{ fontWeight: 900 }}>Citas del {dayKey}</div>
+              <button className="pillBtn" onClick={() => setDayKey(null)}>
+                Cerrar
+              </button>
+            </div>
+            <div style={{ height: 10 }} />
+            {selectedList.length === 0 ? (
+              <div style={{ color: "var(--muted)" }}>Sin citas.</div>
+            ) : (
+              <div className="list">
+                {selectedList.map((a) => (
+                  <div key={a.id} className="fileRow">
+                    <div className="fileIcon">📅</div>
+                    <div className="fileMeta">
+                      <div className="fileName">
+                        {a.title} · {patientName[a.patient_id] || "Paciente"}
+                      </div>
+                      <div className="fileSub">
+                        {fmt(a.start_iso)} → {fmt(a.end_iso)}
+                      </div>
+                    </div>
+                    <button className="smallBtn" onClick={() => onJumpToPatient(a.patient_id)}>
+                      Ir
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="card">
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+          <div>
+            <div style={{ fontWeight: 900 }}>Próximas citas</div>
+            <div style={{ color: "var(--muted)", fontSize: 13 }}>Lista rápida (máximo 30).</div>
+          </div>
+        </div>
+
+        <div style={{ height: 12 }} />
+
+        {upcoming.length === 0 ? (
+          <div style={{ color: "var(--muted)" }}>Aún no hay citas.</div>
+        ) : (
+          <div className="list">
+            {upcoming.map((a) => (
+              <div key={a.id} className="fileRow">
+                <div className="fileIcon">🗓️</div>
+                <div className="fileMeta">
+                  <div className="fileName">
+                    {a.title} · {patientName[a.patient_id] || "Paciente"}
+                  </div>
+                  <div className="fileSub">
+                    {fmt(a.start_iso)} → {fmt(a.end_iso)}
+                  </div>
+                </div>
+                <button className="smallBtn" onClick={() => onJumpToPatient(a.patient_id)}>
+                  Ir
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+type CitasSectionProps = {
+  patient: Patient;
+  appointments: Appointment[];
+  onCreate: (input: AppointmentInput) => void | Promise<void>;
+  onDelete: (appointmentId: number) => void | Promise<void>;
+  onExportPatient: () => void;
+  onExportPatientCsv: () => void;
+};
+
+function CitasSection(props: CitasSectionProps) {
+  const { patient, appointments, onCreate, onDelete, onExportPatient, onExportPatientCsv } = props;
+
+  const [startLocal, setStartLocal] = useState("");
+  const [minutes, setMinutes] = useState("60");
+  const [title, setTitle] = useState("");
+  const [notes, setNotes] = useState("");
+
+  function fmt(iso: string) {
+    try {
+      return new Date(iso).toLocaleString();
+    } catch {
+      return iso;
+    }
+  }
+
+  async function submit() {
+    const s = startLocal.trim();
+    if (!s) return;
+    const mins = Math.max(5, Number(minutes || "60") || 60);
+    const start = new Date(s);
+    if (Number.isNaN(start.getTime())) return;
+    const end = new Date(start.getTime() + mins * 60 * 1000);
+
+    await onCreate({
+      patient_id: patient.id,
+      title: (title || "").trim() || `Cita - ${patient.name}`,
+      start_iso: start.toISOString(),
+      end_iso: end.toISOString(),
+      notes: notes.trim() ? notes.trim() : null,
+    });
+
+    setStartLocal("");
+    setMinutes("60");
+    setTitle("");
+    setNotes("");
+  }
+
+  return (
+    <div className="grid2">
+      <div className="card">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+          <div>
+            <div style={{ fontWeight: 900 }}>Nueva cita</div>
+            <div style={{ color: "var(--muted)", fontSize: 13 }}>Se guarda en NAJU y luego puedes exportarla.</div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <button className="pillBtn primary" onClick={onExportPatient}>
+              Exportar .ics
+            </button>
+            <button className="pillBtn" onClick={onExportPatientCsv}>
+              Exportar CSV
+            </button>
+          </div>
+        </div>
+
+        <div style={{ height: 12 }} />
+
+        <div style={{ display: "grid", gap: 10 }}>
+          <div className="grid2" style={{ gridTemplateColumns: "1fr 140px" }}>
+            <label className="field">
+              <div className="label">Inicio</div>
+              <input className="input" type="datetime-local" value={startLocal} onChange={(e) => setStartLocal(e.target.value)} />
+            </label>
+
+            <label className="field">
+              <div className="label">Minutos</div>
+              <input className="input" type="number" min={5} step={5} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
+            </label>
+          </div>
+
+          <label className="field">
+            <div className="label">Título</div>
+            <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={`Cita - ${patient.name}`} />
+          </label>
+
+          <label className="field">
+            <div className="label">Notas</div>
+            <textarea className="textarea" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Motivo, acuerdos, etc." />
+          </label>
+
+          <button className="pillBtn primary" onClick={submit}>
+            Guardar cita
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+          <div>
+            <div style={{ fontWeight: 900 }}>Citas del paciente</div>
+            <div style={{ color: "var(--muted)", fontSize: 13 }}>{appointments.length} registradas.</div>
+          </div>
+        </div>
+
+        <div style={{ height: 12 }} />
+
+        {appointments.length === 0 ? (
+          <div style={{ color: "var(--muted)" }}>Aún no hay citas.</div>
+        ) : (
+          <div className="list">
+            {appointments.map((a) => (
+              <div key={a.id} className="fileRow">
+                <div className="fileIcon">📅</div>
+                <div className="fileMeta">
+                  <div className="fileName">{a.title}</div>
+                  <div className="fileSub">
+                    {fmt(a.start_iso)} → {fmt(a.end_iso)}
+                  </div>
+                </div>
+                <button className="smallBtn danger" onClick={() => onDelete(a.id)}>
+                  Eliminar
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 export default function App() {
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try {
@@ -2256,7 +2868,15 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [files, setFiles] = useState<PatientFile[]>([]);
   const [allFiles, setAllFiles] = useState<PatientFile[]>([]);
+  const [page, setPage] = useState<"pacientes" | "agenda">("pacientes");
   const [section, setSection] = useState<Section>("resumen");
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+
+  const [agendaMonthCursor, setAgendaMonthCursor] = useState(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const [agendaDayKey, setAgendaDayKey] = useState<string | null>(null);
 
   const [toast, setToast] = useState<Toast>(null);
 
@@ -2413,11 +3033,17 @@ export default function App() {
     setAllFiles(f);
   }
 
+  async function refreshAppointments() {
+    const a = await listAppointments();
+    setAppointments(a);
+  }
+
   useEffect(() => {
     (async () => {
       try {
         await refreshPatients();
         await refreshAllFiles();
+        await refreshAppointments();
       } catch (e: any) {
         pushToast({ type: "err", msg: `Error cargando pacientes: ${errMsg(e)}` });
       }
@@ -2439,6 +3065,7 @@ export default function App() {
 
   function pickPatient(id: string) {
     startVT(() => {
+      setPage("pacientes");
       setSelectedId(id);
       setSection("resumen");
     });
@@ -2603,14 +3230,17 @@ export default function App() {
               <div className="brand">
                 <div className="title">
                   <span>NAJU</span>
-                  <span style={{ fontSize: 11, color: "var(--muted)" }}>gestor web</span>
+                  <span style={{ fontSize: 11, color: "var(--muted)" }}>Gestor web</span>
                 </div>
-                <div className="subtitle">pacientes · exámenes · archivos (web)</div>
+                <div className="subtitle">Pacientes · Exámenes · Archivos (Web)</div>
               </div>
 
               <div className="pillRow">
                 <button className="pillBtn" onClick={() => setShowCreate(true)}>
-                  + paciente
+                  + Paciente
+                </button>
+                <button className="pillBtn" onClick={() => setPage((p) => (p === "agenda" ? "pacientes" : "agenda"))} title="Agenda">
+                  📅 Agenda
                 </button>
                 <button className="pillBtn" onClick={toggleTheme} aria-label="Cambiar tema" title="Modo claro / oscuro">
                   {theme === "dark" ? "☀️" : "🌙"}
@@ -2624,7 +3254,7 @@ export default function App() {
               className="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="buscar por nombre, documento, EPS…"
+              placeholder="Buscar por nombre, documento, EPS…"
             />
           </div>
 
@@ -2677,10 +3307,15 @@ export default function App() {
         {/* Main */}
         <main className="main">
           <div className="mainTop">
-            {!selected ? (
+            {page === "agenda" ? (
               <div className="mainTitle">
-                <h2>selecciona un paciente</h2>
-                <p className="hint">aquí verás el perfil, exámenes y archivos.</p>
+                <h2>Agenda</h2>
+                <p className="hint">Citas locales de NAJU (exportables a Google Calendar).</p>
+              </div>
+            ) : !selected ? (
+              <div className="mainTitle">
+                <h2>Selecciona un paciente</h2>
+                <p className="hint">Aquí verás el perfil, exámenes, citas y archivos.</p>
               </div>
             ) : (
               <div className="mainTitle">
@@ -2706,18 +3341,18 @@ export default function App() {
 
             <div className="actionRow">
               <button className="iconBtn" disabled={!selected} onClick={() => setShowEdit(true)}>
-                ✏️ editar
+                ✏️ Editar
               </button>
               <button className="iconBtn" disabled={!selected} onClick={actionPickPhoto}>
-                📷 foto
+                📷 Foto
               </button>
               <button className="iconBtn" disabled={!selected} onClick={actionAttachFiles}>
-                📎 adjuntar
+                📎 Adjuntar
               </button>
-            </div>
+</div>
           </div>
 
-          {selected ? (
+          {selected && page !== "agenda" ? (
             <div className="segWrap">
               <div className="segmented" role="navigation" aria-label="Secciones del paciente">
                 <button className="segBtn" aria-current={section === "resumen"} onClick={() => startVT(() => setSection("resumen"))}>
@@ -2729,6 +3364,9 @@ export default function App() {
                 <button className="segBtn" aria-current={section === "notas"} onClick={() => startVT(() => setSection("notas"))}>
                   Notas
                 </button>
+                <button className="segBtn" aria-current={section === "citas"} onClick={() => startVT(() => setSection("citas"))}>
+                  Citas
+                </button>
                 <button className="segBtn" aria-current={section === "archivos"} onClick={() => startVT(() => setSection("archivos"))}>
                   Archivos
                 </button>
@@ -2737,7 +3375,32 @@ export default function App() {
           ) : null}
 
           <div className="content">
-            {!selected ? (
+            {page === "agenda" ? (
+              <AgendaView
+                appointments={appointments}
+                patients={patients}
+                monthCursor={agendaMonthCursor}
+                setMonthCursor={setAgendaMonthCursor}
+                dayKey={agendaDayKey}
+                setDayKey={setAgendaDayKey}
+                onJumpToPatient={(pid) => {
+                  pickPatient(pid);
+                  startVT(() => setSection("citas"));
+                }}
+                onExportAll={() => {
+                  const map: Record<string, string> = {};
+                  patients.forEach((p) => (map[p.id] = p.name));
+                  const ics = appointmentsToIcs(appointments, map);
+                  downloadTextFile("naju_citas.ics", "text/calendar;charset=utf-8", ics);
+                }}
+                onExportAllCsv={() => {
+                  const map: Record<string, string> = {};
+                  patients.forEach((p) => (map[p.id] = p.name));
+                  const csv = appointmentsToCsv(appointments, map);
+                  downloadTextFile("naju_citas.csv", "text/csv;charset=utf-8", csv);
+                }}
+              />
+            ) : !selected ? (
               <div className="emptyState">
                 <div className="hero">
                   <h1>NAJU</h1>
@@ -2793,10 +3456,10 @@ export default function App() {
 
                     <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
                       <button className="pillBtn primary" onClick={() => setShowExam(true)}>
-                        + nuevo examen mental
+                        + Nuevo examen mental
                       </button>
                       <button className="pillBtn primary" onClick={() => setShowNote(true)}>
-                        + nueva nota
+                        + Nueva nota
                       </button>
                       <button className="pillBtn danger" onClick={actionDeleteSelected}>
                         eliminar paciente
@@ -3038,13 +3701,53 @@ export default function App() {
                           <div className="fileSub">{isoToNice(f.created_at)}</div>
                         </div>
                         <button className="smallBtn" onClick={() => actionOpenFile(f)}>
-                          abrir
+                          Abrir
                         </button>
                       </div>
                     ))
                   )}
                 </div>
               </div>
+            ) : section === "citas" ? (
+              <CitasSection
+                patient={selected}
+                appointments={appointments
+                  .filter((a) => a.patient_id === selected.id)
+                  .slice()
+                  .sort((x, y) => Date.parse(x.start_iso) - Date.parse(y.start_iso))}
+                onCreate={async (payload) => {
+                  try {
+                    await createAppointment(payload);
+                    await refreshAppointments();
+                    pushToast({ type: "ok", msg: "Cita creada" });
+                  } catch (e: any) {
+                    pushToast({ type: "err", msg: `No se pudo crear la cita: ${errMsg(e)}` });
+                  }
+                }}
+                onDelete={async (id) => {
+                  try {
+                    await deleteAppointment(id);
+                    await refreshAppointments();
+                    pushToast({ type: "ok", msg: "Cita eliminada" });
+                  } catch (e: any) {
+                    pushToast({ type: "err", msg: `No se pudo eliminar: ${errMsg(e)}` });
+                  }
+                }}
+                onExportPatient={() => {
+                  const map: Record<string, string> = {};
+                  patients.forEach((p) => (map[p.id] = p.name));
+                  const subset = appointments.filter((a) => a.patient_id === selected.id);
+                  const ics = appointmentsToIcs(subset, map);
+                  downloadTextFile(`citas_${selected.id}.ics`, "text/calendar;charset=utf-8", ics);
+                }}
+                onExportPatientCsv={() => {
+                  const map: Record<string, string> = {};
+                  patients.forEach((p) => (map[p.id] = p.name));
+                  const subset = appointments.filter((a) => a.patient_id === selected.id);
+                  const csv = appointmentsToCsv(subset, map);
+                  downloadTextFile(`citas_${selected.id}.csv`, "text/csv;charset=utf-8", csv);
+                }}
+              />
             ) : section === "notas" ? (
               <div className="card">
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
@@ -3053,7 +3756,7 @@ export default function App() {
                     <div style={{ color: "var(--muted)", fontSize: 13 }}>Seguimiento clínico rápido con estado y riesgo.</div>
                   </div>
                   <button className="pillBtn primary" onClick={() => setShowNote(true)}>
-                    + nueva nota
+                    + Nueva nota
                   </button>
                 </div>
 
@@ -3071,7 +3774,7 @@ export default function App() {
                           <div className="fileSub">{isoToNice(f.created_at)}</div>
                         </div>
                         <button className="smallBtn" onClick={() => actionOpenFile(f)}>
-                          abrir
+                          Abrir
                         </button>
                       </div>
                     ))
@@ -3086,7 +3789,7 @@ export default function App() {
                     <div style={{ color: "var(--muted)", fontSize: 13 }}>Adjuntos del paciente (PDF, imágenes, etc.).</div>
                   </div>
                   <button className="pillBtn primary" onClick={actionAttachFiles}>
-                    + adjuntar
+                    + Adjuntar
                   </button>
                 </div>
 
@@ -3104,7 +3807,7 @@ export default function App() {
                           <div className="fileSub">{isoToNice(f.created_at)}</div>
                         </div>
                         <button className="smallBtn" onClick={() => actionOpenFile(f)}>
-                          abrir
+                          Abrir
                         </button>
                       </div>
                     ))
@@ -3115,8 +3818,7 @@ export default function App() {
           </div>
         </main>
       </div>
-
-      {/* Modals */}
+{/* Modals */}
       {showCreate ? (
         <Modal title="Nuevo paciente" subtitle="Crea el perfil base del paciente." onClose={() => setShowCreate(false)}>
           <PatientForm
@@ -3158,6 +3860,7 @@ export default function App() {
           onCreated={async () => {
             await refreshFiles(selected.id);
             await refreshAllFiles();
+        await refreshAppointments();
             pushToast({ type: "ok", msg: "Examen creado ✅" });
             startVT(() => setSection("examenes"));
           }}
@@ -3171,6 +3874,7 @@ export default function App() {
           onCreated={async () => {
             await refreshFiles(selected.id);
             await refreshAllFiles();
+        await refreshAppointments();
             pushToast({ type: "ok", msg: "Nota creada ✅" });
             startVT(() => setSection("notas"));
           }}

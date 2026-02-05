@@ -12,6 +12,7 @@ export type Patient = {
   emergency_contact: string | null;
   notes: string | null;
   photo_path: string | null;
+  drive_folder_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -40,10 +41,32 @@ export type PatientFile = {
   meta_json: string | null;
 };
 
+export type Appointment = {
+  id: number;
+  patient_id: string;
+  title: string;
+  start_iso: string; // ISO string in UTC (Date.toISOString())
+  end_iso: string;   // ISO string in UTC (Date.toISOString())
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AppointmentInput = {
+  patient_id: string;
+  title: string;
+  start_iso: string;
+  end_iso: string;
+  notes?: string | null;
+};
+
+
 type Store = {
   patients: Patient[];
   files: PatientFile[];
+  appointments: Appointment[];
   nextFileId: number;
+  nextAppointmentId: number;
 };
 
 const STORAGE_KEY = "naju_web_store";
@@ -57,19 +80,21 @@ function normalizeStore(input: any): Store {
   return {
     patients: Array.isArray(input?.patients) ? (input.patients as Patient[]) : [],
     files: Array.isArray(input?.files) ? (input.files as PatientFile[]) : [],
+    appointments: Array.isArray(input?.appointments) ? (input.appointments as Appointment[]) : [],
     nextFileId: typeof input?.nextFileId === "number" ? input.nextFileId : 1,
+    nextAppointmentId: typeof input?.nextAppointmentId === "number" ? input.nextAppointmentId : 1,
   };
 }
 
 function loadStoreFromLocalStorage(): Store {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) {
-    return { patients: [], files: [], nextFileId: 1 };
+    return { patients: [], files: [], appointments: [], nextFileId: 1, nextAppointmentId: 1 };
   }
   try {
     return normalizeStore(JSON.parse(raw));
   } catch {
-    return { patients: [], files: [], nextFileId: 1 };
+    return { patients: [], files: [], appointments: [], nextFileId: 1, nextAppointmentId: 1 };
   }
 }
 
@@ -168,6 +193,7 @@ export async function createPatient(input: PatientInput): Promise<Patient> {
     emergency_contact: input.emergency_contact ?? null,
     notes: input.notes ?? null,
     photo_path: null,
+    drive_folder_id: null,
     created_at: iso,
     updated_at: iso,
   };
@@ -205,6 +231,7 @@ export async function deletePatient(patientId: string): Promise<void> {
   const store = await getStore();
   store.patients = store.patients.filter((p) => p.id !== patientId);
   store.files = store.files.filter((f) => f.patient_id !== patientId);
+  store.appointments = store.appointments.filter((a) => a.patient_id !== patientId);
   await persistStore(store);
 }
 
@@ -293,4 +320,101 @@ export async function createPatientNote(patientId: string, payload: any): Promis
   store.files.unshift(entry);
   await persistStore(store);
   return entry;
+}
+
+export async function setPatientDriveFolder(patientId: string, folderId: string | null): Promise<Patient> {
+  const store = await getStore();
+  const idx = store.patients.findIndex((p) => p.id === patientId);
+  if (idx === -1) throw new Error("Paciente no encontrado");
+  const current = store.patients[idx];
+  const updated: Patient = {
+    ...current,
+    drive_folder_id: folderId ?? null,
+    updated_at: nowIso(),
+  };
+  store.patients[idx] = updated;
+  await persistStore(store);
+  return updated;
+}
+
+export async function createAttachmentLink(
+  patientId: string,
+  filename: string,
+  url: string,
+  meta?: any
+): Promise<PatientFile> {
+  const store = await getStore();
+  const createdAt = nowIso();
+  const entry: PatientFile = {
+    id: store.nextFileId++,
+    patient_id: patientId,
+    kind: "attachment",
+    filename,
+    created_at: createdAt,
+    path: url,
+    meta_json: meta ? JSON.stringify(meta) : null,
+  };
+  store.files.unshift(entry);
+  await persistStore(store);
+  return entry;
+}
+
+
+function sortByStartIso(a: Appointment, b: Appointment) {
+  const ta = Date.parse(a.start_iso || "");
+  const tb = Date.parse(b.start_iso || "");
+  return (Number.isNaN(ta) ? 0 : ta) - (Number.isNaN(tb) ? 0 : tb);
+}
+
+export async function listAppointments(): Promise<Appointment[]> {
+  const store = await getStore();
+  return (store.appointments || []).slice().sort(sortByStartIso);
+}
+
+export async function listAppointmentsForPatient(patientId: string): Promise<Appointment[]> {
+  const store = await getStore();
+  return (store.appointments || []).filter((a) => a.patient_id === patientId).slice().sort(sortByStartIso);
+}
+
+export async function createAppointment(input: AppointmentInput): Promise<Appointment> {
+  const store = await getStore();
+  const now = nowIso();
+  const entry: Appointment = {
+    id: store.nextAppointmentId++,
+    patient_id: input.patient_id,
+    title: (input.title || "").trim() || "Cita",
+    start_iso: input.start_iso,
+    end_iso: input.end_iso,
+    notes: (input.notes ?? null) ? String(input.notes) : null,
+    created_at: now,
+    updated_at: now,
+  };
+  store.appointments.unshift(entry);
+  await persistStore(store);
+  return entry;
+}
+
+export async function updateAppointment(appointmentId: number, patch: Partial<AppointmentInput>): Promise<Appointment> {
+  const store = await getStore();
+  const idx = (store.appointments || []).findIndex((a) => a.id === appointmentId);
+  if (idx === -1) throw new Error("Cita no encontrada");
+  const cur = store.appointments[idx];
+  const updated: Appointment = {
+    ...cur,
+    patient_id: patch.patient_id ?? cur.patient_id,
+    title: typeof patch.title === "string" ? (patch.title.trim() || "Cita") : cur.title,
+    start_iso: typeof patch.start_iso === "string" ? patch.start_iso : cur.start_iso,
+    end_iso: typeof patch.end_iso === "string" ? patch.end_iso : cur.end_iso,
+    notes: patch.notes !== undefined ? (patch.notes === null ? null : String(patch.notes)) : cur.notes,
+    updated_at: nowIso(),
+  };
+  store.appointments[idx] = updated;
+  await persistStore(store);
+  return updated;
+}
+
+export async function deleteAppointment(appointmentId: number): Promise<void> {
+  const store = await getStore();
+  store.appointments = (store.appointments || []).filter((a) => a.id !== appointmentId);
+  await persistStore(store);
 }

@@ -4530,5 +4530,18 @@
       "meta_json": "{\n  \"type\": \"examen_mental\",\n  \"fecha\": \"2023-10-23\",\n  \"motivo_consulta\": null,\n  \"lugar_entrevista\": null,\n  \"acompanante\": null,\n  \"edad_aparente\": null,\n  \"contextura_fisica\": null,\n  \"caracteristicas_etnicas\": null,\n  \"estatura_para_la_edad\": null,\n  \"arreglo_personal\": null,\n  \"contacto_visual\": \"Sostenido\",\n  \"contacto_verbal\": \"Normal\",\n  \"actitud\": \"Colaboradora\",\n  \"actividad_motora_cuantitativa\": \"Hiperquinético\",\n  \"tono_muscular\": \"Normotónico\",\n  \"posicion\": \"Postura habitual\",\n  \"movimientos\": \"Adaptativos\",\n  \"lenguaje\": \"Incoherente\",\n  \"estado_de_animo\": \"Eutímico\",\n  \"afecto\": \"Congruente\",\n  \"pensamiento_curso\": \"Disgregado\",\n  \"pensamiento_nexos_asociativos\": \"Incoherentes\",\n  \"pensamiento_relevancia\": \"Relevante\",\n  \"pensamiento_contenido\": null,\n  \"percepcion\": \"Sin alteraciones\",\n  \"orientacion\": \"Orientado\",\n  \"sensorio\": \"Alerta\",\n  \"atencion\": \"Conservada\",\n  \"memoria\": \"Conservada\",\n  \"calculo\": \"Eucalculia\",\n  \"abstraccion\": \"Abstrae\",\n  \"juicio\": \"Conservado\",\n  \"insight\": \"Presente\",\n  \"riesgo\": \"Sin riesgo aparente\",\n  \"observaciones\": \"Paciente en la sexta década de la vida (50  años), quien aparenta edad cronológica.\\nEstablece contacto visual y verbal con el entrevistador.\\nPresenta una actitud colaboradora, con aspecto psicomotor hiperquinético\\nAfecto ansioso de fondo triste.\\nEl curso del pensamiento es incoherente, delirante y logorreico. \\nEn cuanto al contenido de pensamiento, presenta ideas delirantes con contenido religioso “Yo me rijo por mi religión, me salvará si no la defraudó”. e ideas referenciales con el personal de la sala.\\nJuicio de la realidad comprometido.\\n\\n\\nSE REALIZA SEGUIMIENTO POR EL ÁREA DE PSICOLOGÍA. Se trata de un paciente masculino cursando el ciclo vital de la adultez (50 años) con diagnóstico de trastorno psicótico agudo de tipo esquizofrénico (En estudio). \\n\\n\\nA la fecha, se muestra cooperador con el proceso terapéutico, no obstante, no cuenta con un discurso coherente y responde de forma prolongada a las preguntas efectuadas, con el contenido del pensamiento alterado. Realiza la ingesta de\",\n  \"patient_snapshot\": {\n    \"id\": \"p_c05304deda\",\n    \"name\": \"Jair Alberto Muñoz\",\n    \"doc_type\": null,\n    \"doc_number\": null\n  }\n}"
     }
   ],
-  "nextFileId": 334
+  "appointments": [
+    {
+      "id": 1,
+      "patient_id": "p_1552f09006",
+      "title": "loca",
+      "start_iso": "2026-02-05T21:19:00.000Z",
+      "end_iso": "2026-02-05T22:19:00.000Z",
+      "notes": "re loca",
+      "created_at": "2026-02-05T21:19:22.229Z",
+      "updated_at": "2026-02-05T21:19:22.229Z"
+    }
+  ],
+  "nextFileId": 334,
+  "nextAppointmentId": 2
 }

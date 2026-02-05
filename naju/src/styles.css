@@ -1255,3 +1255,84 @@ textarea {
   margin-bottom: 12px;
 }
 
+
+
+/* Agenda (Plan B: export ICS/CSV) */
+.najuMonthPill{
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-weight: 800;
+  color: var(--text);
+  background: var(--card);
+  text-transform: capitalize;
+}
+
+.najuCalHead{
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.najuCalDow{
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 800;
+  text-align: center;
+}
+
+.najuCalGrid{
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+}
+
+.najuCalCell{
+  min-height: 62px;
+  padding: 10px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: transform .08s ease, border-color .08s ease;
+}
+
+.najuCalCell:hover{
+  transform: translateY(-1px);
+  border-color: rgba(255,255,255,.22);
+}
+
+.najuCalCell.isDim{
+  opacity: .45;
+}
+
+.najuCalCell.isSel{
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 30%, transparent);
+}
+
+.najuCalNum{
+  font-weight: 900;
+  font-size: 13px;
+}
+
+.najuCalCount{
+  align-self: flex-start;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent) 18%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent) 35%, transparent);
+  font-weight: 900;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.smallBtn.danger{
+  border-color: color-mix(in oklab, #ff4d4d 55%, var(--border));
+  background: color-mix(in oklab, #ff4d4d 18%, var(--card));
+}
