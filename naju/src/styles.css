@@ -81,6 +81,16 @@ textarea {
   font: inherit;
 }
 
+/* Legibilidad consistente entre temas */
+::placeholder {
+  color: var(--muted2);
+  opacity: .92;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--profile-accent), transparent 70%);
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;
@@ -89,8 +99,16 @@ textarea {
 }
 
 .app {
+  /* mobile-friendly viewport height (address bar aware where supported) */
   height: 100vh;
+  height: 100svh;
   padding: 16px;
+}
+
+@supports (height: 100dvh) {
+  .app {
+    height: 100dvh;
+  }
 }
 
 .shell {
@@ -99,6 +117,31 @@ textarea {
   grid-template-columns: minmax(260px, 340px) 1fr;
   gap: 14px;
   align-items: stretch;
+}
+
+/* Mobile / tablet: stack sidebar above main */
+@media (max-width: 920px) {
+  .app {
+    padding: 10px;
+  }
+
+  .shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .sidebar {
+    max-height: 44svh;
+  }
+
+  .mainTop {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .actionRow {
+    justify-content: flex-start;
+  }
 }
 
 /* Sidebar */
@@ -201,14 +244,19 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .pCard {
   position: relative;
   display: grid;
-  grid-template-columns: 56px 1fr;
+  grid-template-columns: 56px minmax(0, 1fr);
   gap: 12px;
   padding: 12px;
+  min-height: 112px;
+  align-items: start;
+  flex: 0 0 auto;
   border-radius: var(--r-lg);
   border: 1px solid var(--border);
   background:
@@ -289,14 +337,20 @@ textarea {
 .pName {
   font-weight: 750;
   line-height: 1.1;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 
 .pSub {
   font-size: 12px;
   color: var(--muted);
-  white-space: nowrap;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .badges {
@@ -427,7 +481,9 @@ textarea {
 .content {
   min-height: 0;
   overflow: auto;
-  padding: 14px 16px 18px;
+  padding: 14px 16px calc(18px + env(safe-area-inset-bottom));
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
 }
 
 .emptyState {
@@ -707,9 +763,12 @@ textarea {
 }
 
 .radarCanvas {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   display: block;
+  touch-action: none;
 }
 
 .radarGrid {
@@ -773,15 +832,15 @@ textarea {
 }
 
 .radarCanvasWrap {
-  display: grid;
-  place-items: center;
+  position: relative;
   width: 100%;
-  aspect-ratio: 1 / 1;
+  height: clamp(260px, 44vh, 600px);
   min-height: 260px;
-  padding: 8px;
+  padding: 0;
   border-radius: var(--r-lg);
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, .75);
+  overflow: hidden;
 }
 
 .miniHelp {
@@ -888,11 +947,27 @@ textarea {
 
 .trendCanvas {
   width: 100%;
-  height: clamp(320px, 44vh, 560px);
+  height: clamp(320px, 52vh, 720px);
   border-radius: var(--r-lg);
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, .75);
   box-shadow: 0 12px 26px rgba(44, 32, 18, .05);
+  display: block;
+  touch-action: none;
+}
+
+@media (max-width: 520px) {
+  .kv {
+    grid-template-columns: 140px 1fr;
+  }
+
+  .radarCanvasWrap {
+    height: clamp(240px, 42vh, 520px);
+  }
+
+  .trendCanvas {
+    height: clamp(300px, 55vh, 650px);
+  }
 }
 
 .trendWrap {

@@ -272,6 +272,16 @@ function RadarChart({
   const prevRef = useRef<number[] | null>(null);
   const prevCompareRef = useRef<number[] | null>(null);
   const rafRef = useRef<number | null>(null);
+  // Zoom/gestures: we scale the *drawing* (not the DOM element), so the canvas
+  // keeps its measured size and always fits the allocated slot.
+  const zoomRef = useRef(1);
+  const resetZoomRafRef = useRef<number | null>(null);
+  const lastMainRef = useRef<number[]>(values);
+  const lastCmpRef = useRef<number[] | null>(compareValues ?? null);
+  const drawRef = useRef<null | ((main: number[], cmp: number[] | null) => void)>(null);
+  const pointersRef = useRef<{ map: Map<number, { x: number; y: number }>; baseDist: number; baseZoom: number }>(
+    { map: new Map(), baseDist: 0, baseZoom: 1 }
+  );
   const [resizeTick, setResizeTick] = useState(0);
 
   const dominantColor = useMemo(() => {
@@ -288,6 +298,114 @@ function RadarChart({
     const ro = new ResizeObserver(() => setResizeTick((t) => t + 1));
     ro.observe(host);
     return () => ro.disconnect();
+  }, []);
+
+  // Zoom with wheel / pinch (mobile) and reset on mouse-leave.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const st = pointersRef.current;
+    const MIN_Z = 0.72;
+    const MAX_Z = 2.35;
+    const clampZoom = (z: number) => Math.max(MIN_Z, Math.min(MAX_Z, z));
+
+    const stopReset = () => {
+      if (resetZoomRafRef.current) cancelAnimationFrame(resetZoomRafRef.current);
+      resetZoomRafRef.current = null;
+    };
+
+    const redraw = () => {
+      const fn = drawRef.current;
+      if (!fn) return;
+      fn(lastMainRef.current, lastCmpRef.current);
+    };
+
+    const animateReset = () => {
+      stopReset();
+      const from = zoomRef.current;
+      if (Math.abs(from - 1) < 0.001) {
+        zoomRef.current = 1;
+        return;
+      }
+      const t0 = performance.now();
+      const dur = 220;
+      const step = (now: number) => {
+        const t = Math.min(1, (now - t0) / dur);
+        const e = 1 - Math.pow(1 - t, 3);
+        zoomRef.current = from + (1 - from) * e;
+        redraw();
+        if (t < 1) resetZoomRafRef.current = requestAnimationFrame(step);
+      };
+      resetZoomRafRef.current = requestAnimationFrame(step);
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      stopReset();
+      const factor = Math.exp(-e.deltaY * 0.0016);
+      zoomRef.current = clampZoom(zoomRef.current * factor);
+      redraw();
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      stopReset();
+      try {
+        canvas.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      st.map.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (st.map.size === 2) {
+        const pts = Array.from(st.map.values());
+        st.baseDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
+        st.baseZoom = zoomRef.current;
+      }
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!st.map.has(e.pointerId)) return;
+      st.map.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (st.map.size === 2) {
+        const pts = Array.from(st.map.values());
+        const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
+        const next = st.baseZoom * (dist / (st.baseDist || 1));
+        zoomRef.current = clampZoom(next);
+        redraw();
+      }
+    };
+
+    const onPointerEnd = (e: PointerEvent) => {
+      st.map.delete(e.pointerId);
+      if (st.map.size < 2) {
+        st.baseDist = 0;
+        st.baseZoom = zoomRef.current;
+      }
+      if (st.map.size === 0) animateReset();
+    };
+
+    const onLeave = () => {
+      st.map.clear();
+      animateReset();
+    };
+
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("pointermove", onPointerMove);
+    canvas.addEventListener("pointerup", onPointerEnd);
+    canvas.addEventListener("pointercancel", onPointerEnd);
+    canvas.addEventListener("mouseleave", onLeave);
+
+    return () => {
+      stopReset();
+      st.map.clear();
+      canvas.removeEventListener("wheel", onWheel as any);
+      canvas.removeEventListener("pointerdown", onPointerDown as any);
+      canvas.removeEventListener("pointermove", onPointerMove as any);
+      canvas.removeEventListener("pointerup", onPointerEnd as any);
+      canvas.removeEventListener("pointercancel", onPointerEnd as any);
+      canvas.removeEventListener("mouseleave", onLeave as any);
+    };
   }, []);
 
   useEffect(() => {
@@ -342,10 +460,31 @@ function RadarChart({
 
       const cx = width / 2;
       const cy = height / 2;
-      const pad = Math.max(24 * dpr, Math.min(width, height) * 0.12);
-      const radius = Math.min(width, height) / 2 - pad;
+
+      // Fuente de labels y padding dinámico (evita que los textos se corten
+      // cuando el canvas se hace pequeño o al cambiar de tema).
       const N = labels.length;
+      const labelPx = Math.round(
+        Math.max(10 * dpr, Math.min(13 * dpr, Math.min(width, height) / 28))
+      );
+      ctx.save();
+      ctx.font = `${labelPx}px ui-sans-serif, system-ui`;
+      const maxLabelW = labels.reduce((m, t) => Math.max(m, ctx.measureText(t ?? "").width), 0);
+      ctx.restore();
+      const basePad = Math.max(26 * dpr, Math.min(width, height) * 0.12);
+      const labelPad = maxLabelW / 2 + 26 * dpr;
+      // Cap de padding para que el radar no se “encoja” demasiado por textos largos.
+      const padCap = Math.min(width, height) * 0.22;
+      const pad = Math.max(basePad, Math.min(labelPad, padCap));
+      const radius = Math.max(6 * dpr, Math.min(width, height) / 2 - pad);
       const rings = 5;
+
+      // Zoom drawing around the center (keeps canvas size intact).
+      const z = zoomRef.current;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.scale(z, z);
+      ctx.translate(-cx, -cy);
 
       ctx.save();
       ctx.globalAlpha = 0.8;
@@ -379,11 +518,11 @@ function RadarChart({
       // Labels
       ctx.save();
       ctx.fillStyle = muted;
-      ctx.font = `${Math.round(11 * dpr)}px ui-sans-serif, system-ui`;
+      ctx.font = `${labelPx}px ui-sans-serif, system-ui`;
       for (let i = 0; i < N; i++) {
         const ang = (Math.PI * 2 * i) / N - Math.PI / 2;
-        const lx = cx + Math.cos(ang) * (radius + 16 * dpr);
-        const ly = cy + Math.sin(ang) * (radius + 16 * dpr);
+        const lx = cx + Math.cos(ang) * (radius + 18 * dpr);
+        const ly = cy + Math.sin(ang) * (radius + 18 * dpr);
         const t = labels[i] ?? "";
         const w = ctx.measureText(t).width;
         ctx.fillText(t, lx - w / 2, ly + 4 * dpr);
@@ -436,7 +575,16 @@ function RadarChart({
         ctx.stroke();
         ctx.restore();
       }
+
+      ctx.restore();
+
+      // Keep last values for gesture-based redraws
+      lastMainRef.current = main.slice();
+      lastCmpRef.current = cmp ? cmp.slice() : null;
     }
+
+    // Allow external (gesture) redraws with the most recent values
+    drawRef.current = (main: number[], cmp: number[] | null) => draw(main, cmp, 1);
 
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
 
@@ -559,6 +707,14 @@ function TrendCanvas({
   const treeRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
+  // Zoom/gestures (same concept as RadarChart): scale the drawing, keep the slot size.
+  const zoomRef = useRef(1);
+  const resetZoomRafRef = useRef<number | null>(null);
+  const lastProgressRef = useRef(1);
+  const drawRef = useRef<null | ((progress?: number) => void)>(null);
+  const pointersRef = useRef<{ map: Map<number, { x: number; y: number }>; baseDist: number; baseZoom: number }>(
+    { map: new Map(), baseDist: 0, baseZoom: 1 }
+  );
   const [resizeTick, setResizeTick] = useState(0);
   const [tip, setTip] = useState<null | { x: number; y: number; title: string; sub?: string }>(null);
 
@@ -568,6 +724,117 @@ function TrendCanvas({
     const ro = new ResizeObserver(() => setResizeTick((t) => t + 1));
     ro.observe(host);
     return () => ro.disconnect();
+  }, []);
+
+  // Zoom with wheel / pinch (mobile) and reset on mouse-leave.
+  useEffect(() => {
+    const canvas = treeRef.current;
+    if (!canvas) return;
+
+    const st = pointersRef.current;
+    const MIN_Z = 0.72;
+    const MAX_Z = 2.35;
+    const clampZoom = (z: number) => Math.max(MIN_Z, Math.min(MAX_Z, z));
+
+    const stopReset = () => {
+      if (resetZoomRafRef.current) cancelAnimationFrame(resetZoomRafRef.current);
+      resetZoomRafRef.current = null;
+    };
+
+    const redraw = () => {
+      const fn = drawRef.current;
+      if (!fn) return;
+      fn(lastProgressRef.current);
+    };
+
+    const animateReset = () => {
+      stopReset();
+      const from = zoomRef.current;
+      if (Math.abs(from - 1) < 0.001) {
+        zoomRef.current = 1;
+        return;
+      }
+      const t0 = performance.now();
+      const dur = 220;
+      const step = (now: number) => {
+        const t = Math.min(1, (now - t0) / dur);
+        const e = 1 - Math.pow(1 - t, 3);
+        zoomRef.current = from + (1 - from) * e;
+        redraw();
+        if (t < 1) resetZoomRafRef.current = requestAnimationFrame(step);
+      };
+      resetZoomRafRef.current = requestAnimationFrame(step);
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      stopReset();
+      setTip(null);
+      const factor = Math.exp(-e.deltaY * 0.0016);
+      zoomRef.current = clampZoom(zoomRef.current * factor);
+      redraw();
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      stopReset();
+      setTip(null);
+      try {
+        canvas.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      st.map.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (st.map.size === 2) {
+        const pts = Array.from(st.map.values());
+        st.baseDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
+        st.baseZoom = zoomRef.current;
+      }
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!st.map.has(e.pointerId)) return;
+      st.map.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (st.map.size === 2) {
+        const pts = Array.from(st.map.values());
+        const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
+        const next = st.baseZoom * (dist / (st.baseDist || 1));
+        zoomRef.current = clampZoom(next);
+        redraw();
+      }
+    };
+
+    const onPointerEnd = (e: PointerEvent) => {
+      st.map.delete(e.pointerId);
+      if (st.map.size < 2) {
+        st.baseDist = 0;
+        st.baseZoom = zoomRef.current;
+      }
+      if (st.map.size === 0) animateReset();
+    };
+
+    const onLeave = () => {
+      st.map.clear();
+      setTip(null);
+      animateReset();
+    };
+
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("pointermove", onPointerMove);
+    canvas.addEventListener("pointerup", onPointerEnd);
+    canvas.addEventListener("pointercancel", onPointerEnd);
+    canvas.addEventListener("mouseleave", onLeave);
+
+    return () => {
+      stopReset();
+      st.map.clear();
+      canvas.removeEventListener("wheel", onWheel as any);
+      canvas.removeEventListener("pointerdown", onPointerDown as any);
+      canvas.removeEventListener("pointermove", onPointerMove as any);
+      canvas.removeEventListener("pointerup", onPointerEnd as any);
+      canvas.removeEventListener("pointercancel", onPointerEnd as any);
+      canvas.removeEventListener("mouseleave", onLeave as any);
+    };
   }, []);
 
   useEffect(() => {
@@ -599,18 +866,20 @@ function TrendCanvas({
 
     const { width, height, dpr } = size;
 
-    // Layout (vertical) with safe margins so text never clips
-    const mTop = 38 * dpr;
-    const mBottom = 44 * dpr;
+    // Helpers
+    const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+
+    // Layout (vertical) con márgenes seguros y posiciones adaptativas.
+    // Objetivo: que los nodos/labels no se salgan del canvas, incluso en espacios pequeños.
+    const mTop = 56 * dpr;
+    const mBottom = 40 * dpr;
     const mSide = 22 * dpr;
     const rootR = 18 * dpr;
     const root = { x: width * 0.5, y: mTop + rootR };
-    const row1 = mTop + (height - mTop - mBottom) * 0.52;
-    const row2 = height - mBottom;
+    const availH = Math.max(1, height - mTop - mBottom);
+    const row1 = clamp(mTop + availH * 0.46, root.y + rootR + 36 * dpr, height - mBottom - 140 * dpr);
+    const row2 = clamp(height - mBottom - 28 * dpr, row1 + 84 * dpr, height - 54 * dpr);
     const xs = labels.map((_, i) => mSide + (i * (width - mSide * 2)) / Math.max(1, labels.length - 1));
-
-    // Helpers
-    const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
     function hexToRgb(hex: string) {
       const h = hex.replace("#", "").trim();
       if (h.length === 3) {
@@ -753,7 +1022,7 @@ function TrendCanvas({
       ctx.fillRect(0, 0, width, height);
       ctx.restore();
 
-      // Header + helper (kept inside canvas)
+      // Header (kept inside canvas)
       ctx.save();
       ctx.globalAlpha = 0.92;
       ctx.fillStyle = text;
@@ -762,10 +1031,22 @@ function TrendCanvas({
       ctx.fillText("Árbol de tendencias", 16 * dpr, 24 * dpr);
       ctx.fillStyle = muted;
       ctx.font = `${Math.round(11 * dpr)}px ui-sans-serif, system-ui`;
-      ctx.fillText("Grosor = peso • Arco = intensidad • Hojas = micro-evidencias", 16 * dpr, height - 16 * dpr);
+      ctx.fillText("Raíz = global • Ramas = macro • Hojas = micro-evidencias", 16 * dpr, 42 * dpr);
       ctx.restore();
 
       hits.length = 0;
+
+      // Keep last progress for gesture-based redraws
+      lastProgressRef.current = progress;
+
+      // Zoom drawing around the center (header/background stay stable)
+      const z = zoomRef.current;
+      const zx = width / 2;
+      const zy = height / 2;
+      ctx.save();
+      ctx.translate(zx, zy);
+      ctx.scale(z, z);
+      ctx.translate(-zx, -zy);
 
       // Root (global)
       const avg = macroValues.length ? macroValues.reduce((a, b) => a + b, 0) / macroValues.length : 0;
@@ -821,13 +1102,28 @@ function TrendCanvas({
 
         hits.push({ kind: "macro", x, y: row1, r: macroR, title: label, sub: `Peso: ${(w * 100).toFixed(0)}% · Valor: ${val.toFixed(1)}/${max}` });
 
-        // Leaves (micro evidence)
+        // Leaves (micro evidence) — se ubican dentro de la "columna" del macro
+        // para evitar que se salgan o se monten cuando el canvas se estrecha.
         entries.forEach(([value, count], j) => {
           const pct = clamp(count / total, 0, 1);
-          const offset = (j === 0 ? -44 : 44) * dpr;
-          const lx = x + offset;
-          const ly = row2;
           const leafR = (11 + 8 * pct) * dpr;
+
+          const slotLeft = idx === 0 ? mSide : (xs[idx - 1] + x) / 2;
+          const slotRight = idx === labels.length - 1 ? width - mSide : (x + xs[idx + 1]) / 2;
+          const slotW = Math.max(1, slotRight - slotLeft);
+          const baseOff = clamp(slotW * 0.22, 26 * dpr, 56 * dpr);
+
+          const dir = j === 0 ? -1 : 1;
+          let lx = x + dir * baseOff;
+          // Mantener dentro del slot y respetar radios
+          lx = clamp(lx, slotLeft + leafR + 2 * dpr, slotRight - leafR - 2 * dpr);
+          // Asegurar separación mínima con el macro
+          const minSep = macroR + leafR + 10 * dpr;
+          if (Math.abs(lx - x) < minSep) {
+            lx = clamp(x + dir * minSep, slotLeft + leafR + 2 * dpr, slotRight - leafR - 2 * dpr);
+          }
+
+          const ly = row2;
 
           // Edge macro -> leaf
           drawEdge(x, row1, macroR, lx, ly, leafR, c, (1.2 + pct * 3.6) * dpr, 0.50 * progress);
@@ -849,9 +1145,14 @@ function TrendCanvas({
         });
       });
 
+      ctx.restore();
+
       // Store hits in dataset for pointer events (lightweight: attach to canvas)
       (canvas as any).__hits = hits;
     }
+
+    // Allow external (gesture) redraws with the most recent progress
+    drawRef.current = (progress: number = 1) => draw(progress);
 
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     const t0 = performance.now();
@@ -877,11 +1178,18 @@ function TrendCanvas({
     const scale = canvas.width / Math.max(1, rect.width);
     const x = (e.clientX - rect.left) * scale;
     const y = (e.clientY - rect.top) * scale;
+    // Invert zoom transform for hit-testing (we zoom the drawing around center).
+    const z = Math.max(0.001, zoomRef.current);
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    const bx = (x - cx) / z + cx;
+    const by = (y - cy) / z + cy;
     const hits: any[] = (canvas as any).__hits ?? [];
     const hit = hits.find((h) => {
-      const dx = x - h.x;
-      const dy = y - h.y;
-      return Math.hypot(dx, dy) <= h.r + 8 * scale;
+      const dx = bx - h.x;
+      const dy = by - h.y;
+      const tol = (8 * scale) / z;
+      return Math.hypot(dx, dy) <= h.r + tol;
     });
 
     if (!hit) {
@@ -2855,21 +3163,6 @@ export default function App() {
           }}
         />
       ) : null}
-
-      {showNote && selected ? (
-        <NoteModal
-          patient={selected}
-          onClose={() => setShowNote(false)}
-          onCreated={async () => {
-            await refreshFiles(selected.id);
-            await refreshAllFiles();
-            pushToast({ type: "ok", msg: "Nota creada ✅" });
-            startVT(() => setSection("notas"));
-          }}
-        />
-      ) : null}
-
-      {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
 
       {showNote && selected ? (
         <NoteModal
