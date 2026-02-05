@@ -1,0 +1,23 @@
+{
+  "patients": [
+    {
+      "id": "10f686bb-0c94-4fa4-bfc1-30942bab704c",
+      "name": "luisa perez",
+      "doc_type": "PP",
+      "doc_number": "234234234",
+      "insurer": "2342",
+      "birth_date": "2025-07-03",
+      "sex": "F",
+      "phone": "243234",
+      "email": "234234",
+      "address": "234234",
+      "emergency_contact": "234234",
+      "notes": null,
+      "photo_path": null,
+      "created_at": "2026-02-05T01:41:52.254Z",
+      "updated_at": "2026-02-05T01:41:52.254Z"
+    }
+  ],
+  "files": [],
+  "nextFileId": 1
+}

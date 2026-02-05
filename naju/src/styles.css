@@ -706,6 +706,12 @@ textarea {
   height: auto;
 }
 
+.radarCanvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
 .radarGrid {
   fill: none;
   stroke: color-mix(in srgb, var(--profile-accent), var(--border) 65%);
@@ -769,6 +775,9 @@ textarea {
 .radarCanvasWrap {
   display: grid;
   place-items: center;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  min-height: 260px;
   padding: 8px;
   border-radius: var(--r-lg);
   border: 1px solid var(--border);
@@ -835,6 +844,7 @@ textarea {
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, color-mix(in srgb, var(--profile-accent), #fff 30%), var(--profile-accent));
+  transition: width .35s cubic-bezier(.2,.8,.2,1);
 }
 
 .percentFoot {
@@ -878,21 +888,214 @@ textarea {
 
 .trendCanvas {
   width: 100%;
-  height: 260px;
+  height: clamp(320px, 44vh, 560px);
   border-radius: var(--r-lg);
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, .75);
   box-shadow: 0 12px 26px rgba(44, 32, 18, .05);
 }
 
-.trendCanvas.treeCanvas {
-  height: 300px;
+.trendWrap {
+  position: relative;
 }
+
+.chartTip {
+  position: absolute;
+  z-index: 3;
+  min-width: 200px;
+  max-width: 280px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, .88);
+  box-shadow: 0 18px 38px rgba(44, 32, 18, .18);
+  backdrop-filter: blur(10px);
+  pointer-events: none;
+  animation: tipIn 160ms ease-out;
+}
+
+.chartTip .tTitle {
+  font-weight: 900;
+  font-size: 12px;
+}
+
+.chartTip .tSub {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+/* Toast (evita textos invisibles en modo oscuro) */
+.toast{
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel), #ffffff 18%);
+  box-shadow: 0 18px 50px rgba(44,32,18,.18);
+  backdrop-filter: blur(10px);
+  animation: tipIn 160ms ease-out;
+}
+.toastTitle{
+  font-weight: 900;
+  margin-bottom: 2px;
+  color: var(--text);
+}
+.toastMsg{
+  color: var(--muted);
+  line-height: 1.35;
+}
+.toastErr .toastTitle{ color: #7b2f25; }
+
+@keyframes tipIn {
+  from { opacity: 0; transform: translateY(4px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
 
 @media (max-width: 980px) {
   .radar-wrap {
     grid-template-columns: 1fr;
   }
+}
+
+/* =============================
+   Tema oscuro (mantiene acentos)
+   ============================= */
+
+:root[data-theme="dark"] {
+  --bg: #070b12;
+  --bg2: #0b1323;
+  --panel: #0d1526;
+  --panel2: #0b1120;
+  --text: #e6e7eb;
+  --muted: #aeb4bf;
+  --muted2: #8590a3;
+  --border: rgba(230, 231, 235, .12);
+  --shadow: 0 24px 60px rgba(0, 0, 0, .45);
+  --shadow2: 0 10px 24px rgba(0, 0, 0, .35);
+}
+
+:root[data-theme="dark"] body {
+  background: radial-gradient(1200px 600px at 18% 10%, rgba(199,164,90,.12), transparent 60%),
+    radial-gradient(900px 460px at 82% 0%, rgba(109,123,85,.16), transparent 60%),
+    linear-gradient(180deg, var(--bg2), var(--bg));
+}
+
+:root[data-theme="dark"] body::before {
+  background:
+    linear-gradient(90deg, rgba(230,231,235,.08) 1px, transparent 1px),
+    linear-gradient(rgba(230,231,235,.06) 1px, transparent 1px);
+}
+
+:root[data-theme="dark"] .sidebar {
+  background: rgba(13, 21, 38, .78);
+  border-color: rgba(230,231,235,.10);
+}
+
+:root[data-theme="dark"] .main {
+  background: rgba(13, 21, 38, .64);
+  border-color: rgba(230,231,235,.10);
+}
+
+:root[data-theme="dark"] .card,
+:root[data-theme="dark"] .panel,
+:root[data-theme="dark"] .radarCanvasWrap,
+:root[data-theme="dark"] .percent-panel,
+:root[data-theme="dark"] .miniHelp,
+:root[data-theme="dark"] .pCard,
+:root[data-theme="dark"] .fileRow,
+:root[data-theme="dark"] .previewItem,
+:root[data-theme="dark"] .previewNote,
+:root[data-theme="dark"] .pill,
+:root[data-theme="dark"] .smallBtn,
+:root[data-theme="dark"] .fileIcon,
+:root[data-theme="dark"] .hero {
+  background: rgba(15, 23, 42, .72);
+  border-color: rgba(230,231,235,.10);
+}
+
+:root[data-theme="dark"] .profileBadge {
+  background: rgba(15, 23, 42, .72);
+  border-color: rgba(230,231,235,.10);
+  color: color-mix(in srgb, var(--profile-accent), #ffffff 24%);
+}
+
+:root[data-theme="dark"] .pCard:hover,
+:root[data-theme="dark"] .fileRow:hover,
+:root[data-theme="dark"] .card:hover {
+  background: rgba(15, 23, 42, .82);
+}
+
+:root[data-theme="dark"] .pillBtn,
+:root[data-theme="dark"] .iconBtn,
+:root[data-theme="dark"] .badge,
+:root[data-theme="dark"] .segmented,
+:root[data-theme="dark"] .search,
+:root[data-theme="dark"] .input,
+:root[data-theme="dark"] .select,
+:root[data-theme="dark"] .textarea {
+  background: rgba(15, 23, 42, .62);
+  border-color: rgba(230,231,235,.12);
+  color: var(--text);
+}
+
+:root[data-theme="dark"] .badge.gold{
+  color: var(--text);
+  border-color: rgba(199,164,90,.28);
+}
+
+:root[data-theme="dark"] .initials{
+  color: var(--text);
+}
+
+:root[data-theme="dark"] .profileBadge {
+  background: rgba(15, 23, 42, .62);
+  border-color: rgba(230,231,235,.12);
+  color: color-mix(in srgb, var(--profile-accent), var(--text) 18%);
+}
+
+:root[data-theme="dark"] .pillBtn:hover,
+:root[data-theme="dark"] .iconBtn:hover,
+:root[data-theme="dark"] .smallBtn:hover {
+  background: rgba(15, 23, 42, .78);
+}
+
+:root[data-theme="dark"] .pillBtn.primary {
+  box-shadow: 0 18px 40px rgba(0,0,0,.32), 0 0 0 1px rgba(199,164,90,.22) inset;
+}
+
+:root[data-theme="dark"] .toast {
+  background: rgba(15, 23, 42, .86);
+  border-color: rgba(230,231,235,.14);
+}
+
+:root[data-theme="dark"] .toastErr .toastTitle{ color: #ffb4a9; }
+
+:root[data-theme="dark"] .trendCanvas {
+  background: rgba(15, 23, 42, .68);
+  border-color: rgba(230,231,235,.12);
+  box-shadow: 0 14px 34px rgba(0,0,0,.28);
+}
+
+:root[data-theme="dark"] .chartTip {
+  background: rgba(15, 23, 42, .92);
+  border-color: rgba(230,231,235,.14);
+  box-shadow: 0 18px 46px rgba(0,0,0,.45);
+}
+
+:root[data-theme="dark"] .modal {
+  background: rgba(15, 23, 42, .92);
+  border-color: rgba(230,231,235,.14);
+}
+
+:root[data-theme="dark"] a {
+  color: color-mix(in srgb, var(--profile-accent), #ffffff 24%);
 }
 
 .previewBody {
@@ -977,7 +1180,3 @@ textarea {
   margin-bottom: 12px;
 }
 
-  .main {
-    border-radius: var(--r-xl);
-  }
-}

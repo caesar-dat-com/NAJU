@@ -97,7 +97,14 @@ function scoreLookup(value: string | null | undefined, map: Record<string, numbe
   return map[value] ?? 0;
 }
 
-const AXES = [
+type AxisDef = {
+  key: string;
+  noteKey?: string;
+  label: string;
+  map: Record<string, number>;
+};
+
+const AXES: AxisDef[] = [
   {
     key: "estado_de_animo",
     noteKey: "estado_animo",
@@ -191,11 +198,12 @@ function getAxisValues(files: PatientFile[]) {
 
   const values = AXES.map((axis) => latestByAxis.get(axis.label)?.value ?? 0);
   let dominant: { label: string; value: number } | null = null;
-  values.forEach((value, idx) => {
+  for (let idx = 0; idx < values.length; idx++) {
+    const value = values[idx];
     if (!dominant || value > dominant.value) {
       dominant = { label: AXES[idx].label, value };
     }
-  });
+  }
   if (!dominant || dominant.value === 0) return { values, dominant: null };
   return { values, dominant };
 }
@@ -248,58 +256,214 @@ function isoToShortDate(iso: string) {
 function RadarChart({
   labels,
   values,
+  compareValues,
   accent,
   max,
+  theme,
 }: {
   labels: string[];
   values: number[];
+  compareValues?: number[] | null;
   accent: string;
   max: number;
+  theme?: "light" | "dark";
 }) {
-  const size = 260;
-  const center = size / 2;
-  const radius = 90;
-  const points = values.map((value, i) => {
-    const angle = (Math.PI * 2 * i) / values.length - Math.PI / 2;
-    const r = (radius * value) / max;
-    return {
-      x: center + Math.cos(angle) * r,
-      y: center + Math.sin(angle) * r,
-      angle,
-    };
-  });
-  const polygon = points.map((p) => `${p.x},${p.y}`).join(" ");
-  const gridLevels = Array.from({ length: 5 }, (_, idx) => idx + 1).map((level) => {
-    const r = (radius * level) / 5;
-    const ring = values.map((_, i) => {
-      const angle = (Math.PI * 2 * i) / values.length - Math.PI / 2;
-      return `${center + Math.cos(angle) * r},${center + Math.sin(angle) * r}`;
-    });
-    return ring.join(" ");
-  });
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const prevRef = useRef<number[] | null>(null);
+  const prevCompareRef = useRef<number[] | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const [resizeTick, setResizeTick] = useState(0);
 
-  return (
-    <svg className="radar" viewBox={`0 0 ${size} ${size}`} aria-label="Perfil radial del paciente">
-      {gridLevels.map((ring, idx) => (
-        <polygon key={idx} points={ring} className="radarGrid" />
-      ))}
-      {points.map((p, idx) => (
-        <line key={idx} x1={center} y1={center} x2={p.x} y2={p.y} className="radarAxis" />
-      ))}
-      <polygon points={polygon} className="radarFill" style={{ fill: accent }} />
-      {labels.map((label, idx) => {
-        const angle = (Math.PI * 2 * idx) / labels.length - Math.PI / 2;
-        const labelRadius = radius + 18;
-        const x = center + Math.cos(angle) * labelRadius;
-        const y = center + Math.sin(angle) * labelRadius;
-        return (
-          <text key={label} x={x} y={y} className="radarLabel" textAnchor="middle">
-            {label}
-          </text>
-        );
-      })}
-    </svg>
-  );
+  const dominantColor = useMemo(() => {
+    const m = Math.max(...values);
+    const idx = values.findIndex((v) => v === m);
+    const label = labels[idx] ?? null;
+    return (label && PROFILE_COLORS[label]) || accent;
+  }, [values, labels, accent]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const host = canvas?.parentElement;
+    if (!canvas || !host || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setResizeTick((t) => t + 1));
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    // Inicializa dimensiones (se recalculan en cada frame dentro de draw)
+    useCanvasSize(canvas);
+    const ctx = canvas.getContext("2d")!;
+
+    const prefersReduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+
+    const start = performance.now();
+    const from = prevRef.current ?? values;
+    const to = values;
+    const fromCmp = prevCompareRef.current ?? compareValues ?? null;
+    const toCmp = compareValues ?? null;
+
+    function easeOutCubic(t: number) {
+      return 1 - Math.pow(1 - t, 3);
+    }
+
+    function lerp(a: number, b: number, t: number) {
+      return a + (b - a) * t;
+    }
+
+    function readVar(name: string, fallback: string) {
+      try {
+        const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+        return v || fallback;
+      } catch {
+        return fallback;
+      }
+    }
+
+    const grid = readVar("--border", "rgba(199,164,90,0.25)");
+    const axis = readVar("--muted2", "rgba(120,120,120,0.55)");
+    const text = readVar("--text", "#2b241d");
+    const muted = readVar("--muted", "#6b5f55");
+
+    function draw(main: number[], cmp: number[] | null, alpha = 1) {
+      const size = useCanvasSize(canvas);
+      if (!size) return;
+      const { width, height, dpr } = size;
+      ctx.clearRect(0, 0, width, height);
+
+      // Fondo suave dentro del canvas (se adapta al tema por alpha)
+      ctx.save();
+      ctx.globalAlpha = 0.07;
+      ctx.fillStyle = text;
+      ctx.fillRect(0, 0, width, height);
+      ctx.restore();
+
+      const cx = width / 2;
+      const cy = height / 2;
+      const pad = Math.max(24 * dpr, Math.min(width, height) * 0.12);
+      const radius = Math.min(width, height) / 2 - pad;
+      const N = labels.length;
+      const rings = 5;
+
+      ctx.save();
+      ctx.globalAlpha = 0.8;
+      ctx.strokeStyle = grid;
+      ctx.lineWidth = 1.2 * dpr;
+      for (let r = 1; r <= rings; r++) {
+        const rr = (radius * r) / rings;
+        ctx.beginPath();
+        for (let i = 0; i < N; i++) {
+          const ang = (Math.PI * 2 * i) / N - Math.PI / 2;
+          const x = cx + Math.cos(ang) * rr;
+          const y = cy + Math.sin(ang) * rr;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = axis;
+      ctx.lineWidth = 1.1 * dpr;
+      for (let i = 0; i < N; i++) {
+        const ang = (Math.PI * 2 * i) / N - Math.PI / 2;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + Math.cos(ang) * radius, cy + Math.sin(ang) * radius);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Labels
+      ctx.save();
+      ctx.fillStyle = muted;
+      ctx.font = `${Math.round(11 * dpr)}px ui-sans-serif, system-ui`;
+      for (let i = 0; i < N; i++) {
+        const ang = (Math.PI * 2 * i) / N - Math.PI / 2;
+        const lx = cx + Math.cos(ang) * (radius + 16 * dpr);
+        const ly = cy + Math.sin(ang) * (radius + 16 * dpr);
+        const t = labels[i] ?? "";
+        const w = ctx.measureText(t).width;
+        ctx.fillText(t, lx - w / 2, ly + 4 * dpr);
+      }
+      ctx.restore();
+
+      // Polygon (main)
+      const stroke = dominantColor;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        const ang = (Math.PI * 2 * i) / N - Math.PI / 2;
+        const rr = (radius * Math.max(0, Math.min(max, main[i] ?? 0))) / max;
+        const x = cx + Math.cos(ang) * rr;
+        const y = cy + Math.sin(ang) * rr;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.save();
+      ctx.globalAlpha = alpha * 0.18;
+      ctx.fillStyle = stroke;
+      ctx.fill();
+      ctx.restore();
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 2.2 * dpr;
+      ctx.shadowColor = stroke;
+      ctx.shadowBlur = 14 * dpr;
+      ctx.stroke();
+      ctx.restore();
+
+      // Compare polygon (dashed)
+      if (cmp && cmp.length === N) {
+        ctx.save();
+        ctx.globalAlpha = 0.85;
+        ctx.setLineDash([7 * dpr, 6 * dpr]);
+        ctx.lineWidth = 2.0 * dpr;
+        ctx.strokeStyle = text;
+        ctx.beginPath();
+        for (let i = 0; i < N; i++) {
+          const ang = (Math.PI * 2 * i) / N - Math.PI / 2;
+          const rr = (radius * Math.max(0, Math.min(max, cmp[i] ?? 0))) / max;
+          const x = cx + Math.cos(ang) * rr;
+          const y = cy + Math.sin(ang) * rr;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+
+    const duration = prefersReduced ? 1 : 340;
+
+    const tick = (now: number) => {
+      const t = duration === 1 ? 1 : Math.min(1, (now - start) / duration);
+      const e = easeOutCubic(t);
+      const main = values.map((_, i) => lerp(from[i] ?? 0, to[i] ?? 0, e));
+      const cmp = toCmp
+        ? toCmp.map((_, i) => lerp((fromCmp?.[i] ?? 0), (toCmp?.[i] ?? 0), e))
+        : null;
+      draw(main, cmp, 1);
+      if (t < 1) rafRef.current = requestAnimationFrame(tick);
+    };
+
+    rafRef.current = requestAnimationFrame(tick);
+
+    prevRef.current = values;
+    prevCompareRef.current = compareValues ?? null;
+
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, [labels, values, compareValues, accent, max, dominantColor, theme, resizeTick]);
+
+  return <canvas ref={canvasRef} className="radarCanvas" aria-label="Perfil radial del paciente" />;
 }
 
 function useCanvasSize(canvas: HTMLCanvasElement | null) {
@@ -382,83 +546,374 @@ function buildEvidence(files: PatientFile[], labels: string[]) {
 function TrendCanvas({
   labels,
   files,
+  macroValues,
+  max,
+  theme,
 }: {
   labels: string[];
   files: PatientFile[];
+  macroValues: number[];
+  max: number;
+  theme?: "light" | "dark";
 }) {
   const treeRef = useRef<HTMLCanvasElement | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const [resizeTick, setResizeTick] = useState(0);
+  const [tip, setTip] = useState<null | { x: number; y: number; title: string; sub?: string }>(null);
+
+  useEffect(() => {
+    const host = wrapRef.current;
+    if (!host || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setResizeTick((t) => t + 1));
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     const canvas = treeRef.current;
     if (!canvas) return;
     const size = useCanvasSize(canvas);
     if (!size) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const { width, height } = size;
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = "rgba(0,0,0,0.04)";
-    ctx.fillRect(0, 0, width, height);
+    const ctx = canvas.getContext("2d")!;
+
+    const prefersReduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+
+    function readVar(name: string, fallback: string) {
+      try {
+        const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+        return v || fallback;
+      } catch {
+        return fallback;
+      }
+    }
+
+    // Palette from current theme variables
+    const text = readVar("--text", "#2b241d");
+    const muted = readVar("--muted", "#6b5f55");
+    const panel = readVar("--panel", "rgba(255,255,255,.75)");
 
     const evidence = buildEvidence(files, labels);
-    const root = { x: width * 0.5, y: height * 0.12 };
-    const row1 = height * 0.48;
-    const row2 = height * 0.82;
-    const xs = labels.map((_, i) => width * 0.12 + (i * width * 0.76) / (labels.length - 1));
+    const sum = macroValues.reduce((acc, v) => acc + v, 0) || 1;
+    const weights = macroValues.map((v) => v / sum);
 
-    ctx.strokeStyle = "rgba(199,164,90,0.35)";
-    ctx.lineWidth = 1.5;
-    xs.forEach((x) => {
+    const { width, height, dpr } = size;
+
+    // Layout (vertical) with safe margins so text never clips
+    const mTop = 38 * dpr;
+    const mBottom = 44 * dpr;
+    const mSide = 22 * dpr;
+    const rootR = 18 * dpr;
+    const root = { x: width * 0.5, y: mTop + rootR };
+    const row1 = mTop + (height - mTop - mBottom) * 0.52;
+    const row2 = height - mBottom;
+    const xs = labels.map((_, i) => mSide + (i * (width - mSide * 2)) / Math.max(1, labels.length - 1));
+
+    // Helpers
+    const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+    function hexToRgb(hex: string) {
+      const h = hex.replace("#", "").trim();
+      if (h.length === 3) {
+        const r = parseInt(h[0] + h[0], 16);
+        const g = parseInt(h[1] + h[1], 16);
+        const b = parseInt(h[2] + h[2], 16);
+        return { r, g, b };
+      }
+      if (h.length >= 6) {
+        const r = parseInt(h.slice(0, 2), 16);
+        const g = parseInt(h.slice(2, 4), 16);
+        const b = parseInt(h.slice(4, 6), 16);
+        return { r, g, b };
+      }
+      return null;
+    }
+    function withAlpha(color: string, a: number) {
+      // Accept rgba()/rgb()/hex. If we can't parse, return as-is.
+      if (color.startsWith("rgba(")) {
+        const inner = color.slice(5, -1);
+        const parts = inner.split(",").map((s) => s.trim());
+        if (parts.length >= 3) return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${a})`;
+        return color;
+      }
+      if (color.startsWith("rgb(")) {
+        const inner = color.slice(4, -1);
+        const parts = inner.split(",").map((s) => s.trim());
+        if (parts.length >= 3) return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${a})`;
+        return color;
+      }
+      const rgb = hexToRgb(color);
+      if (!rgb) return color;
+      return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${a})`;
+    }
+    function drawEdge(ax: number, ay: number, ar: number, bx: number, by: number, br: number, stroke: string, w: number, alpha: number) {
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = Math.max(1, w);
+      ctx.shadowColor = stroke;
+      ctx.shadowBlur = 12 * dpr;
       ctx.beginPath();
-      ctx.moveTo(root.x, root.y + 18);
-      ctx.lineTo(x, row1 - 18);
+      // Bezier curve (vertical)
+      const midY = (ay + by) / 2;
+      ctx.moveTo(ax, ay + ar * 0.92);
+      ctx.bezierCurveTo(ax, midY, bx, midY, bx, by - br * 0.92);
       ctx.stroke();
-    });
+      ctx.restore();
+    }
+    function drawNode(params: {
+      x: number;
+      y: number;
+      r: number;
+      color: string;
+      ringPct: number; // 0..1
+      centerText: string;
+      label?: string;
+      sub?: string;
+      labelMode?: "above" | "below";
+    }) {
+      const { x, y, r, color, ringPct, centerText, label, sub, labelMode } = params;
+      const p = clamp(ringPct, 0, 1);
 
-    ctx.fillStyle = "rgba(199,164,90,0.2)";
-    ctx.beginPath();
-    ctx.arc(root.x, root.y, 18, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(199,164,90,0.8)";
-    ctx.stroke();
-    ctx.fillStyle = "rgba(43,36,29,0.8)";
-    ctx.font = "12px ui-sans-serif, system-ui";
-    ctx.fillText("Perfil global", root.x - 30, root.y - 24);
-
-    labels.forEach((label, idx) => {
-      const x = xs[idx];
+      // Aura
+      ctx.save();
       ctx.beginPath();
-      ctx.arc(x, row1, 14, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(109,123,85,0.2)";
+      ctx.arc(x, y, r + 7 * dpr, 0, Math.PI * 2);
+      ctx.fillStyle = withAlpha(color, 0.10 + p * 0.10);
       ctx.fill();
-      ctx.strokeStyle = "rgba(109,123,85,0.6)";
+      ctx.restore();
+
+      // Core
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = withAlpha(color, 0.10 + p * 0.18);
+      ctx.fill();
+      ctx.strokeStyle = withAlpha(color, 0.88);
+      ctx.lineWidth = Math.max(1.2, 2.2 * dpr);
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 16 * dpr;
       ctx.stroke();
-      ctx.fillStyle = "rgba(43,36,29,0.8)";
-      ctx.fillText(label, x - ctx.measureText(label).width / 2, row1 + 28);
+      ctx.restore();
 
-      const bucket = evidence[idx];
-      const entries = Array.from(bucket.entries()).slice(0, 2);
-      entries.forEach((entry, j) => {
-        const [value] = entry;
-        const lx = x + (j === 0 ? -32 : 32);
-        ctx.beginPath();
-        ctx.arc(lx, row2, 10, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(31,41,55,0.18)";
-        ctx.fill();
-        ctx.strokeStyle = "rgba(199,164,90,0.5)";
-        ctx.stroke();
-        ctx.fillStyle = "rgba(43,36,29,0.75)";
-        ctx.fillText(String(value), lx - ctx.measureText(String(value)).width / 2, row2 + 24);
-        ctx.strokeStyle = "rgba(199,164,90,0.25)";
-        ctx.beginPath();
-        ctx.moveTo(x, row1 + 14);
-        ctx.lineTo(lx, row2 - 12);
-        ctx.stroke();
+      // Intensity ring
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x, y, r + 3.2 * dpr, -Math.PI / 2, -Math.PI / 2 + p * 2 * Math.PI);
+      ctx.strokeStyle = withAlpha(color, 0.95);
+      ctx.lineWidth = Math.max(1.2, 2.8 * dpr);
+      ctx.stroke();
+      ctx.restore();
+
+      // Center text
+      ctx.save();
+      ctx.fillStyle = text;
+      ctx.globalAlpha = 0.92;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = `800 ${Math.round(11 * dpr)}px ui-sans-serif, system-ui`;
+      ctx.fillText(centerText, x, y + 0.5 * dpr);
+      ctx.restore();
+
+      // Label + sub text (keep inside canvas)
+      if (label) {
+        const yBase = labelMode === "above" ? y - (r + 14 * dpr) : y + (r + 18 * dpr);
+        const y1 = clamp(yBase, 16 * dpr, height - 26 * dpr);
+        ctx.save();
+        ctx.globalAlpha = 0.95;
+        ctx.fillStyle = text;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "alphabetic";
+        ctx.font = `700 ${Math.round(12 * dpr)}px ui-sans-serif, system-ui`;
+        ctx.fillText(label, x, y1);
+        ctx.restore();
+
+        if (sub) {
+          const y2 = clamp(y1 + 16 * dpr, 22 * dpr, height - 10 * dpr);
+          ctx.save();
+          ctx.globalAlpha = 0.92;
+          ctx.fillStyle = muted;
+          ctx.textAlign = "center";
+          ctx.font = `${Math.round(11 * dpr)}px ui-sans-serif, system-ui`;
+          ctx.fillText(sub, x, y2);
+          ctx.restore();
+        }
+      }
+    }
+
+    type Hit = { kind: "root" | "macro" | "leaf"; x: number; y: number; r: number; title: string; sub?: string };
+    const hits: Hit[] = [];
+
+    function draw(progress: number) {
+      ctx.clearRect(0, 0, width, height);
+
+      // Slight tint / depth (uses current theme)
+      ctx.save();
+      ctx.globalAlpha = 0.06;
+      ctx.fillStyle = panel;
+      ctx.fillRect(0, 0, width, height);
+      ctx.restore();
+
+      // Header + helper (kept inside canvas)
+      ctx.save();
+      ctx.globalAlpha = 0.92;
+      ctx.fillStyle = text;
+      ctx.textAlign = "left";
+      ctx.font = `800 ${Math.round(13 * dpr)}px ui-sans-serif, system-ui`;
+      ctx.fillText("Árbol de tendencias", 16 * dpr, 24 * dpr);
+      ctx.fillStyle = muted;
+      ctx.font = `${Math.round(11 * dpr)}px ui-sans-serif, system-ui`;
+      ctx.fillText("Grosor = peso • Arco = intensidad • Hojas = micro-evidencias", 16 * dpr, height - 16 * dpr);
+      ctx.restore();
+
+      hits.length = 0;
+
+      // Root (global)
+      const avg = macroValues.length ? macroValues.reduce((a, b) => a + b, 0) / macroValues.length : 0;
+      const rootColor = readVar("--profile-accent", "#c7a45a");
+
+      // Root -> macros edges (curved)
+      xs.forEach((x, idx) => {
+        const w = weights[idx] ?? 0;
+        const lw = (1.3 + w * 4.4) * dpr;
+        const c = PROFILE_COLORS[labels[idx]] ?? rootColor;
+        drawEdge(root.x, root.y, rootR, x, row1, (12 + 8 * w) * dpr, c, lw, 0.55 * progress);
       });
-    });
-  }, [labels, files]);
 
-  return <canvas ref={treeRef} className="trendCanvas treeCanvas" aria-label="Árbol de tendencias" />;
+      drawNode({
+        x: root.x,
+        y: root.y,
+        r: rootR,
+        color: rootColor,
+        ringPct: clamp(avg / Math.max(1, max), 0, 1) * progress,
+        centerText: `${avg.toFixed(1)}/${max}`,
+        label: "Perfil global",
+        sub: "Resumen del filtro actual",
+        labelMode: "above",
+      });
+
+      hits.push({ kind: "root", x: root.x, y: root.y, r: rootR, title: "Perfil global", sub: `Promedio: ${avg.toFixed(1)}/${max}` });
+
+      // Macro nodes + leaves
+      labels.forEach((label, idx) => {
+        const x = xs[idx];
+        const w = weights[idx] ?? 0;
+        const c = PROFILE_COLORS[label] ?? rootColor;
+        const macroR = (12 + 8 * w) * dpr;
+        const val = macroValues[idx] ?? 0;
+
+        // Leaves data (top 2)
+        const bucket = evidence[idx];
+        const total = Array.from(bucket.values()).reduce((a, b) => a + b, 0) || 1;
+        const entries = Array.from(bucket.entries()).sort((a, b) => b[1] - a[1]).slice(0, 2);
+
+        // Macro node
+        drawNode({
+          x,
+          y: row1,
+          r: macroR,
+          color: c,
+          ringPct: clamp(val / Math.max(1, max), 0, 1) * progress,
+          centerText: `${val.toFixed(1)}`,
+          label,
+          sub: `${(w * 100).toFixed(0)}% · ${val.toFixed(1)}/${max}`,
+          labelMode: "below",
+        });
+
+        hits.push({ kind: "macro", x, y: row1, r: macroR, title: label, sub: `Peso: ${(w * 100).toFixed(0)}% · Valor: ${val.toFixed(1)}/${max}` });
+
+        // Leaves (micro evidence)
+        entries.forEach(([value, count], j) => {
+          const pct = clamp(count / total, 0, 1);
+          const offset = (j === 0 ? -44 : 44) * dpr;
+          const lx = x + offset;
+          const ly = row2;
+          const leafR = (11 + 8 * pct) * dpr;
+
+          // Edge macro -> leaf
+          drawEdge(x, row1, macroR, lx, ly, leafR, c, (1.2 + pct * 3.6) * dpr, 0.50 * progress);
+
+          // Leaf node (ring shows pct)
+          drawNode({
+            x: lx,
+            y: ly,
+            r: leafR,
+            color: c,
+            ringPct: pct * progress,
+            centerText: `${Math.round(pct * 100)}%`,
+            label: String(value),
+            sub: `${count} evidencia(s)`,
+            labelMode: "below",
+          });
+
+          hits.push({ kind: "leaf", x: lx, y: ly, r: leafR, title: `${label} · ${value}`, sub: `Evidencias: ${count} · ${(pct * 100).toFixed(0)}% del total (${total})` });
+        });
+      });
+
+      // Store hits in dataset for pointer events (lightweight: attach to canvas)
+      (canvas as any).__hits = hits;
+    }
+
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    const t0 = performance.now();
+    const duration = prefersReduced ? 1 : 320;
+    const tick = (now: number) => {
+      const t = duration === 1 ? 1 : Math.min(1, (now - t0) / duration);
+      const p = 1 - Math.pow(1 - t, 3);
+      draw(p);
+      if (t < 1) rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, [labels, files, macroValues, max, theme, resizeTick]);
+
+  function onMove(e: React.MouseEvent) {
+    const canvas = treeRef.current;
+    const wrap = wrapRef.current;
+    if (!canvas || !wrap) return;
+    const rect = canvas.getBoundingClientRect();
+    const scale = canvas.width / Math.max(1, rect.width);
+    const x = (e.clientX - rect.left) * scale;
+    const y = (e.clientY - rect.top) * scale;
+    const hits: any[] = (canvas as any).__hits ?? [];
+    const hit = hits.find((h) => {
+      const dx = x - h.x;
+      const dy = y - h.y;
+      return Math.hypot(dx, dy) <= h.r + 8 * scale;
+    });
+
+    if (!hit) {
+      setTip(null);
+      return;
+    }
+    const wrapRect = wrap.getBoundingClientRect();
+    setTip({
+      x: e.clientX - wrapRect.left + 14,
+      y: e.clientY - wrapRect.top + 12,
+      title: hit.title,
+      sub: hit.sub,
+    });
+  }
+
+  return (
+    <div className="trendWrap" ref={wrapRef}>
+      <canvas
+        ref={treeRef}
+        className="trendCanvas treeCanvas"
+        aria-label="Árbol de tendencias"
+        onMouseMove={onMove}
+        onMouseLeave={() => setTip(null)}
+      />
+      {tip ? (
+        <div className="chartTip" style={{ left: tip.x, top: tip.y }}>
+          <div className="tTitle">{tip.title}</div>
+          {tip.sub ? <div className="tSub">{tip.sub}</div> : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function Modal({
@@ -1462,6 +1917,32 @@ function FilePreviewModal({
 }
 
 export default function App() {
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    try {
+      const saved = localStorage.getItem("naju_theme");
+      if (saved === "light" || saved === "dark") return saved;
+    } catch {
+      // ignore
+    }
+    const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ?? false;
+    return prefersDark ? "dark" : "light";
+  });
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    // ayuda a que inputs/barras nativas usen el esquema correcto
+    (document.documentElement.style as any).colorScheme = theme;
+    try {
+      localStorage.setItem("naju_theme", theme);
+    } catch {
+      // ignore
+    }
+  }, [theme]);
+
+  function toggleTheme() {
+    setTheme((t) => (t === "dark" ? "light" : "dark"));
+  }
+
   const [patients, setPatients] = useState<Patient[]>([]);
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1560,11 +2041,12 @@ export default function App() {
   const radarSum = useMemo(() => radarValues.reduce((acc, val) => acc + val, 0), [radarValues]);
   const dominantMacro = useMemo(() => {
     let winner: { label: string; value: number } | null = null;
-    radarValues.forEach((value, idx) => {
+    for (let idx = 0; idx < radarValues.length; idx++) {
+      const value = radarValues[idx];
       if (!winner || value > winner.value) {
         winner = { label: AXES[idx].label, value };
       }
-    });
+    }
     if (!winner || winner.value === 0) return null;
     const pct = radarSum ? (winner.value / radarSum) * 100 : 0;
     return { ...winner, pct };
@@ -1575,7 +2057,7 @@ export default function App() {
   const focusOptions = useMemo(
     () =>
       trendFiles.map((file) => ({
-        value: file.id,
+        value: String(file.id),
         label: `${file.kind === "exam" ? "Examen" : "Nota"} · ${file.filename} · ${isoToShortDate(
           file.created_at
         )}`,
@@ -1583,10 +2065,19 @@ export default function App() {
     [trendFiles]
   );
 
-  const profileByPatientMap = useMemo(
-    () => buildProfileMap(patients, allFiles, getAxisValues, PROFILE_COLORS),
-    [patients, allFiles]
-  );
+  const focusRadarValues = useMemo(() => {
+    if (!focusRecord) return null;
+    const file = trendFiles.find((f) => String(f.id) === focusRecord);
+    if (!file) return null;
+    const meta = parseMetaJson(file);
+    if (!meta) return null;
+    const raw = AXES.map((axis) => {
+      const v = meta[axis.key] ?? (axis.noteKey ? meta[axis.noteKey] : undefined);
+      if (!v) return 0;
+      return scoreLookup(v, axis.map);
+    });
+    return raw.map((value) => (value / 3) * scaleMax);
+  }, [focusRecord, trendFiles, scaleMax]);
 
   const profileByPatientMap = useMemo(
     () => buildProfileMap(patients, allFiles, getAxisValues, PROFILE_COLORS),
@@ -1813,6 +2304,9 @@ export default function App() {
                 <button className="pillBtn" onClick={() => setShowCreate(true)}>
                   + paciente
                 </button>
+                <button className="pillBtn" onClick={toggleTheme} aria-label="Cambiar tema" title="Modo claro / oscuro">
+                  {theme === "dark" ? "☀️" : "🌙"}
+                </button>
               </div>
             </div>
           </div>
@@ -2030,15 +2524,17 @@ export default function App() {
                               <RadarChart
                                 labels={profileLabels}
                                 values={radarValues}
+                                compareValues={focusRadarValues}
                                 accent={selectedProfile?.accent ?? "#c7a45a"}
                                 max={scaleMax}
+                                theme={theme}
                               />
                             </div>
                             <div className="miniHelp" id="treeHow">
                               Árbol: raíz = resumen global · ramas = categorías macro · hojas = micro-evidencias
                               (examen mental + notas) que explican la tendencia.
                             </div>
-                            <TrendCanvas labels={profileLabels} files={trendFiles} />
+                            <TrendCanvas labels={profileLabels} files={trendFiles} macroValues={radarValues} max={scaleMax} theme={theme} />
                           </div>
 
                           <div className="controls">
@@ -2392,22 +2888,9 @@ export default function App() {
 
       {/* Toast simple */}
       {toast ? (
-        <div
-          style={{
-            position: "fixed",
-            right: 16,
-            bottom: 16,
-            padding: "12px 14px",
-            borderRadius: 16,
-            border: "1px solid var(--border)",
-            background: "rgba(255,253,248,.95)",
-            boxShadow: "0 18px 50px rgba(44,32,18,.18)",
-            color: toast.type === "err" ? "#7b2f25" : "var(--text)",
-            maxWidth: 420,
-          }}
-        >
-          <div style={{ fontWeight: 800, marginBottom: 2 }}>{toast.type === "err" ? "Error" : "Listo"}</div>
-          <div style={{ color: "var(--muted)", lineHeight: 1.35 }}>{toast.msg}</div>
+        <div className={`toast ${toast.type === "err" ? "toastErr" : ""}`} role="status" aria-live="polite">
+          <div className="toastTitle">{toast.type === "err" ? "Error" : "Listo"}</div>
+          <div className="toastMsg">{toast.msg}</div>
         </div>
       ) : null}
     </div>
