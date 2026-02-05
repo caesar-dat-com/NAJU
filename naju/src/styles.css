@@ -193,6 +193,7 @@ textarea {
   display: flex;
   gap: 10px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .pillBtn {
@@ -1336,3 +1337,80 @@ textarea {
   border-color: color-mix(in oklab, #ff4d4d 55%, var(--border));
   background: color-mix(in oklab, #ff4d4d 18%, var(--card));
 }
+
+/* --- Home KPIs / Progreso / Ayuda --- */
+.kpiBig{
+  font-size: 40px;
+  font-weight: 950;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  margin: 6px 0 6px;
+}
+.kpiBox{
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,.55);
+  border-radius: 16px;
+  padding: 10px 12px;
+}
+:root[data-theme="dark"] .kpiBox{
+  background: rgba(255,255,255,.04);
+}
+.kpiLabel{
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+.kpiValue{
+  font-size: 20px;
+  font-weight: 950;
+  margin-top: 4px;
+}
+.progress{
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(199,164,90,.18);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  margin-top: 10px;
+}
+.progressFill{
+  height: 100%;
+  background: linear-gradient(90deg, rgba(199,164,90,.9), rgba(109,123,85,.9));
+}
+.stateRow{
+  display:flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255,255,255,.55);
+}
+:root[data-theme="dark"] .stateRow{
+  background: rgba(255,255,255,.04);
+}
+.stateName{ font-weight: 900; }
+.stateCount{ color: var(--muted); font-weight: 900; }
+.helpSteps{ display: grid; gap: 10px; }
+.helpStep{ display:flex; gap: 10px; align-items: flex-start; line-height: 1.5; }
+.helpDot{
+  width: 26px; height: 26px;
+  display:flex; align-items:center; justify-content:center;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(199,164,90,.18);
+  font-weight: 950;
+}
+.toast{
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 10px 12px;
+  background: rgba(255,255,255,.68);
+  font-weight: 800;
+}
+:root[data-theme="dark"] .toast{
+  background: rgba(255,255,255,.04);
+}
+.toast.ok{ border-color: rgba(109,123,85,.55); }
+.toast.err{ border-color: rgba(220,80,80,.55); }

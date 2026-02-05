@@ -60,13 +60,42 @@ export type AppointmentInput = {
   notes?: string | null;
 };
 
+export type ErrorReport = {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  title: string;
+  severity: "baja" | "media" | "alta";
+  status: "abierto" | "enviado" | "cerrado";
+  patient_id: string | null;
+  description: string;
+  steps: string | null;
+  expected: string | null;
+  actual: string | null;
+  context_json: string | null;
+};
+
+export type ErrorReportInput = {
+  title: string;
+  severity?: "baja" | "media" | "alta";
+  status?: "abierto" | "enviado" | "cerrado";
+  patient_id?: string | null;
+  description: string;
+  steps?: string | null;
+  expected?: string | null;
+  actual?: string | null;
+  context?: any;
+};
+
 
 type Store = {
   patients: Patient[];
   files: PatientFile[];
   appointments: Appointment[];
+  errorReports: ErrorReport[];
   nextFileId: number;
   nextAppointmentId: number;
+  nextErrorId: number;
 };
 
 const STORAGE_KEY = "naju_web_store";
@@ -81,20 +110,22 @@ function normalizeStore(input: any): Store {
     patients: Array.isArray(input?.patients) ? (input.patients as Patient[]) : [],
     files: Array.isArray(input?.files) ? (input.files as PatientFile[]) : [],
     appointments: Array.isArray(input?.appointments) ? (input.appointments as Appointment[]) : [],
+    errorReports: Array.isArray(input?.errorReports) ? (input.errorReports as ErrorReport[]) : [],
     nextFileId: typeof input?.nextFileId === "number" ? input.nextFileId : 1,
     nextAppointmentId: typeof input?.nextAppointmentId === "number" ? input.nextAppointmentId : 1,
+    nextErrorId: typeof input?.nextErrorId === "number" ? input.nextErrorId : 1,
   };
 }
 
 function loadStoreFromLocalStorage(): Store {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) {
-    return { patients: [], files: [], appointments: [], nextFileId: 1, nextAppointmentId: 1 };
+    return { patients: [], files: [], appointments: [], errorReports: [], nextFileId: 1, nextAppointmentId: 1, nextErrorId: 1 };
   }
   try {
     return normalizeStore(JSON.parse(raw));
   } catch {
-    return { patients: [], files: [], appointments: [], nextFileId: 1, nextAppointmentId: 1 };
+    return { patients: [], files: [], appointments: [], errorReports: [], nextFileId: 1, nextAppointmentId: 1, nextErrorId: 1 };
   }
 }
 
@@ -416,5 +447,70 @@ export async function updateAppointment(appointmentId: number, patch: Partial<Ap
 export async function deleteAppointment(appointmentId: number): Promise<void> {
   const store = await getStore();
   store.appointments = (store.appointments || []).filter((a) => a.id !== appointmentId);
+  await persistStore(store);
+}
+
+
+
+export async function listErrorReports(): Promise<ErrorReport[]> {
+  const store = await getStore();
+  return (store.errorReports || []).slice().sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+}
+
+export async function createErrorReport(input: ErrorReportInput): Promise<ErrorReport> {
+  const store = await getStore();
+  const now = nowIso();
+  const title = (input.title || "").trim();
+  const description = (input.description || "").trim();
+  if (!title) throw new Error("Título requerido");
+  if (!description) throw new Error("Describe el error (qué pasó)");
+
+  const report: ErrorReport = {
+    id: store.nextErrorId++,
+    created_at: now,
+    updated_at: now,
+    title,
+    severity: input.severity ?? "media",
+    status: input.status ?? "abierto",
+    patient_id: input.patient_id ?? null,
+    description,
+    steps: input.steps !== undefined ? (input.steps === null ? null : String(input.steps)) : null,
+    expected: input.expected !== undefined ? (input.expected === null ? null : String(input.expected)) : null,
+    actual: input.actual !== undefined ? (input.actual === null ? null : String(input.actual)) : null,
+    context_json: input.context !== undefined ? JSON.stringify(input.context ?? null) : null,
+  };
+
+  store.errorReports = store.errorReports || [];
+  store.errorReports.unshift(report);
+  await persistStore(store);
+  return report;
+}
+
+export async function updateErrorReport(reportId: number, patch: Partial<ErrorReportInput>): Promise<ErrorReport> {
+  const store = await getStore();
+  const idx = (store.errorReports || []).findIndex((r) => r.id === reportId);
+  if (idx === -1) throw new Error("Reporte no encontrado");
+  const cur = store.errorReports[idx];
+  const updated: ErrorReport = {
+    ...cur,
+    title: typeof patch.title === "string" ? (patch.title.trim() || cur.title) : cur.title,
+    severity: patch.severity ?? cur.severity,
+    status: patch.status ?? cur.status,
+    patient_id: patch.patient_id !== undefined ? (patch.patient_id ?? null) : cur.patient_id,
+    description: typeof patch.description === "string" ? (patch.description.trim() || cur.description) : cur.description,
+    steps: patch.steps !== undefined ? (patch.steps === null ? null : String(patch.steps)) : cur.steps,
+    expected: patch.expected !== undefined ? (patch.expected === null ? null : String(patch.expected)) : cur.expected,
+    actual: patch.actual !== undefined ? (patch.actual === null ? null : String(patch.actual)) : cur.actual,
+    context_json: patch.context !== undefined ? JSON.stringify(patch.context ?? null) : cur.context_json,
+    updated_at: nowIso(),
+  };
+  store.errorReports[idx] = updated;
+  await persistStore(store);
+  return updated;
+}
+
+export async function deleteErrorReport(reportId: number): Promise<void> {
+  const store = await getStore();
+  store.errorReports = (store.errorReports || []).filter((r) => r.id !== reportId);
   await persistStore(store);
 }

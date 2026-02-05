@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./styles.css";
+import HomeDashboard from "./HomeDashboard";
+import ErrorCenter from "./ErrorCenter";
 import { appointmentsToCsv, appointmentsToIcs, downloadTextFile } from "./lib/export";
 import {
   Patient,
@@ -20,6 +22,11 @@ import {
   createAppointment,
   deleteAppointment,
   listAppointments,
+  ErrorReport,
+  ErrorReportInput,
+  createErrorReport,
+  deleteErrorReport,
+  listErrorReports,
 } from "./lib/api";
 import { buildProfileMap } from "./lib/profile";
 
@@ -2868,9 +2875,10 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [files, setFiles] = useState<PatientFile[]>([]);
   const [allFiles, setAllFiles] = useState<PatientFile[]>([]);
-  const [page, setPage] = useState<"pacientes" | "agenda">("pacientes");
+  const [page, setPage] = useState<"home" | "pacientes" | "agenda" | "errores">("home");
   const [section, setSection] = useState<Section>("resumen");
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [errorReports, setErrorReports] = useState<ErrorReport[]>([]);
 
   const [agendaMonthCursor, setAgendaMonthCursor] = useState(() => {
     const d = new Date();
@@ -3038,12 +3046,20 @@ export default function App() {
     setAppointments(a);
   }
 
+
+  async function refreshErrorReports() {
+    const list = await listErrorReports();
+    setErrorReports(list);
+  }
+
+
   useEffect(() => {
     (async () => {
       try {
         await refreshPatients();
         await refreshAllFiles();
         await refreshAppointments();
+        await refreshErrorReports();
       } catch (e: any) {
         pushToast({ type: "err", msg: `Error cargando pacientes: ${errMsg(e)}` });
       }
@@ -3063,11 +3079,11 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
-  function pickPatient(id: string) {
+  function pickPatient(id: string, sec: Section = "resumen") {
     startVT(() => {
       setPage("pacientes");
       setSelectedId(id);
-      setSection("resumen");
+      setSection(sec);
     });
   }
 
@@ -3236,11 +3252,20 @@ export default function App() {
               </div>
 
               <div className="pillRow">
-                <button className="pillBtn" onClick={() => setShowCreate(true)}>
-                  + Paciente
+                <button className="pillBtn" aria-current={page === "home"} onClick={() => setPage("home")} title="Inicio">
+                  🏠 Inicio
                 </button>
-                <button className="pillBtn" onClick={() => setPage((p) => (p === "agenda" ? "pacientes" : "agenda"))} title="Agenda">
+                <button className="pillBtn" aria-current={page === "pacientes"} onClick={() => setPage("pacientes")} title="Pacientes">
+                  👥 Pacientes
+                </button>
+                <button className="pillBtn" aria-current={page === "agenda"} onClick={() => setPage("agenda")} title="Agenda">
                   📅 Agenda
+                </button>
+                <button className="pillBtn" aria-current={page === "errores"} onClick={() => setPage("errores")} title="Reporte de errores">
+                  🐞 Errores
+                </button>
+                <button className="pillBtn primary" onClick={() => setShowCreate(true)}>
+                  + Paciente
                 </button>
                 <button className="pillBtn" onClick={toggleTheme} aria-label="Cambiar tema" title="Modo claro / oscuro">
                   {theme === "dark" ? "☀️" : "🌙"}
@@ -3307,15 +3332,25 @@ export default function App() {
         {/* Main */}
         <main className="main">
           <div className="mainTop">
-            {page === "agenda" ? (
+            {page === "home" ? (
+              <div className="mainTitle">
+                <h2>Inicio</h2>
+                <p className="hint">Panel del psicólogo y accesos rápidos.</p>
+              </div>
+            ) : page === "errores" ? (
+              <div className="mainTitle">
+                <h2>Errores</h2>
+                <p className="hint">Registra incidencias y exporta para soporte.</p>
+              </div>
+            ) : page === "agenda" ? (
               <div className="mainTitle">
                 <h2>Agenda</h2>
                 <p className="hint">Citas locales de NAJU (exportables a Google Calendar).</p>
               </div>
             ) : !selected ? (
               <div className="mainTitle">
-                <h2>Selecciona un paciente</h2>
-                <p className="hint">Aquí verás el perfil, exámenes, citas y archivos.</p>
+                <h2>Pacientes</h2>
+                <p className="hint">Selecciona un paciente para ver su perfil, exámenes, citas y archivos.</p>
               </div>
             ) : (
               <div className="mainTitle">
@@ -3339,6 +3374,7 @@ export default function App() {
               </div>
             )}
 
+            {page === "pacientes" && selected ? (
             <div className="actionRow">
               <button className="iconBtn" disabled={!selected} onClick={() => setShowEdit(true)}>
                 ✏️ Editar
@@ -3350,9 +3386,10 @@ export default function App() {
                 📎 Adjuntar
               </button>
 </div>
+          ) : null}
           </div>
 
-          {selected && page !== "agenda" ? (
+          {page === "pacientes" && selected ? (
             <div className="segWrap">
               <div className="segmented" role="navigation" aria-label="Secciones del paciente">
                 <button className="segBtn" aria-current={section === "resumen"} onClick={() => startVT(() => setSection("resumen"))}>
@@ -3375,7 +3412,35 @@ export default function App() {
           ) : null}
 
           <div className="content">
-            {page === "agenda" ? (
+            {page === "home" ? (
+              <HomeDashboard
+                patients={patients}
+                allFiles={allFiles}
+                appointments={appointments}
+                profileByPatientMap={profileByPatientMap}
+                theme={theme}
+                onAddPatient={() => setShowCreate(true)}
+                onGoPatients={() => setPage("pacientes")}
+                onGoAgenda={() => setPage("agenda")}
+                onGoErrors={() => setPage("errores")}
+                onToggleTheme={toggleTheme}
+                onJumpToPatientCitas={(pid) => pickPatient(pid, "citas")}
+              />
+            ) : page === "errores" ? (
+              <ErrorCenter
+                reports={errorReports}
+                patients={patients}
+                onRefresh={refreshErrorReports}
+                onCreate={async (input) => {
+                  await createErrorReport(input);
+                  await refreshErrorReports();
+                }}
+                onDelete={async (id) => {
+                  await deleteErrorReport(id);
+                  await refreshErrorReports();
+                }}
+              />
+            ) : page === "agenda" ? (
               <AgendaView
                 appointments={appointments}
                 patients={patients}
@@ -3719,6 +3784,7 @@ export default function App() {
                   try {
                     await createAppointment(payload);
                     await refreshAppointments();
+        await refreshErrorReports();
                     pushToast({ type: "ok", msg: "Cita creada" });
                   } catch (e: any) {
                     pushToast({ type: "err", msg: `No se pudo crear la cita: ${errMsg(e)}` });
@@ -3728,6 +3794,7 @@ export default function App() {
                   try {
                     await deleteAppointment(id);
                     await refreshAppointments();
+        await refreshErrorReports();
                     pushToast({ type: "ok", msg: "Cita eliminada" });
                   } catch (e: any) {
                     pushToast({ type: "err", msg: `No se pudo eliminar: ${errMsg(e)}` });
@@ -3861,6 +3928,7 @@ export default function App() {
             await refreshFiles(selected.id);
             await refreshAllFiles();
         await refreshAppointments();
+        await refreshErrorReports();
             pushToast({ type: "ok", msg: "Examen creado ✅" });
             startVT(() => setSection("examenes"));
           }}
@@ -3875,6 +3943,7 @@ export default function App() {
             await refreshFiles(selected.id);
             await refreshAllFiles();
         await refreshAppointments();
+        await refreshErrorReports();
             pushToast({ type: "ok", msg: "Nota creada ✅" });
             startVT(() => setSection("notas"));
           }}
