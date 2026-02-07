@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# NAJU local "database" (dev file-store)
+patients/store.json
+patients/assets/
+patients/*.json

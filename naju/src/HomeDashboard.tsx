@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import { useMemo } from "react";
 import type { Appointment, Patient, PatientFile } from "./lib/api";
 
 type ProfileMeta = { values: number[]; accent: string; label: string | null };

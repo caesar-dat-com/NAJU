@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { ErrorReport, ErrorReportInput, Patient } from "./lib/api";
 import { downloadTextFile } from "./lib/export";
 

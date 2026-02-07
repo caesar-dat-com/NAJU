@@ -3,6 +3,7 @@ import "./styles.css";
 import HomeDashboard from "./HomeDashboard";
 import ErrorCenter from "./ErrorCenter";
 import { appointmentsToCsv, appointmentsToIcs, downloadTextFile } from "./lib/export";
+import { makeQrSvgDataUrl } from "./lib/qr";
 import {
   Patient,
   PatientFile,
@@ -23,7 +24,6 @@ import {
   deleteAppointment,
   listAppointments,
   ErrorReport,
-  ErrorReportInput,
   createErrorReport,
   deleteErrorReport,
   listErrorReports,
@@ -103,6 +103,35 @@ function isImage(path: string) {
 
 function isPdf(path: string) {
   return path.startsWith("data:application/pdf") || /\.pdf$/i.test(path);
+}
+
+// --- Ocean background (global) ---
+function WaveSvg({ variant }: { variant: "back" | "front" }) {
+  return (
+    <svg className={`waveSvg ${variant}`} viewBox="0 0 1200 200" preserveAspectRatio="none" aria-hidden="true">
+      <path d="M0,120 C150,60 300,180 450,120 C600,60 750,180 900,120 C1050,60 1200,180 1200,120 L1200,200 L0,200 Z" />
+    </svg>
+  );
+}
+
+function OceanBackground() {
+  return (
+    <div className="ocean" aria-hidden="true">
+      <div className="wave waveBack">
+        <div className="waveInner">
+          <WaveSvg variant="back" />
+          <WaveSvg variant="back" />
+        </div>
+      </div>
+      <div className="wave waveFront">
+        <div className="waveInner">
+          <WaveSvg variant="front" />
+          <WaveSvg variant="front" />
+        </div>
+      </div>
+      <div className="sea" />
+    </div>
+  );
 }
 
 
@@ -2074,6 +2103,78 @@ function NoteModal({
 }) {
   const [busy, setBusy] = useState(false);
 
+  // --- QR share (LAN) ---
+  const [netIps, setNetIps] = useState<string[]>([]);
+  const [netPort, setNetPort] = useState<string>(() => {
+    const p = String(window.location.port || "").trim();
+    return p || "1420";
+  });
+  const [netError, setNetError] = useState<string | null>(null);
+  const [hostIp, setHostIp] = useState<string>("");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        setNetError(null);
+        const r = await fetch("/__naju_netinfo", { cache: "no-store" as any });
+        const j = await r.json();
+        const ips = Array.isArray(j?.ips) ? j.ips.map((x: any) => String(x)).filter(Boolean) : [];
+        const port = String(j?.port ?? "").trim();
+        if (!alive) return;
+        setNetIps(ips);
+        if (port) setNetPort(port);
+        if (!hostIp && ips[0]) setHostIp(ips[0]);
+      } catch {
+        if (!alive) return;
+        setNetError("No se pudo detectar la IP LAN (revisa firewall o red). Puedes escribirla manualmente.");
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!hostIp && netIps[0]) setHostIp(netIps[0]);
+  }, [netIps, hostIp]);
+
+  const shareUrl = useMemo(() => {
+    const ip = (hostIp || "").trim();
+    const port = String(netPort || "").trim();
+    if (!ip) return "";
+    const qp = new URLSearchParams({ open: "note", patientId: patient.id });
+    return `http://${ip}:${port}/?${qp.toString()}`;
+  }, [hostIp, netPort, patient.id]);
+
+  const qrDataUrl = useMemo(() => {
+    if (!shareUrl) return "";
+    try {
+      return makeQrSvgDataUrl(shareUrl);
+    } catch {
+      return "";
+    }
+  }, [shareUrl]);
+
+  async function copyShareUrl() {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+    } catch {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = shareUrl;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        ta.remove();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   const [recording, setRecording] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [audioFile, setAudioFile] = useState<File | null>(null);
@@ -2288,6 +2389,68 @@ function NoteModal({
           onChange={onAudioSelected}
           style={{ display: "none" }}
         />
+
+        <div className="percent-panel qrCard">
+          <div className="qrHeader">
+            <div>
+              <div className="qrTitle">Captura rápida (otro dispositivo)</div>
+              <div className="qrSub">
+                Escanea el QR desde otro celular/tablet en la misma red Wi‑Fi para abrir NAJU directamente en este formulario.
+              </div>
+            </div>
+            <button className="pillBtn" type="button" onClick={copyShareUrl} disabled={!shareUrl} title="Copiar enlace">
+              Copiar enlace
+            </button>
+          </div>
+
+          <div className="qrGrid">
+            <div className="qrBox">
+              {qrDataUrl ? (
+                <img className="qrImg" src={qrDataUrl} alt="QR para abrir NAJU" />
+              ) : (
+                <div className="qrFallback">
+                  <div style={{ fontWeight: 800 }}>QR no disponible</div>
+                  <div style={{ marginTop: 6, color: "var(--muted)" }}>
+                    Selecciona o escribe una IP LAN para generar el enlace.
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="qrControls">
+              <div className="field">
+                <div className="label">IP del PC (LAN)</div>
+                <div className="qrRow">
+                  <select className="select" value={hostIp} onChange={(e) => setHostIp(e.target.value)}>
+                    <option value="">Seleccionar…</option>
+                    {netIps.map((ip) => (
+                      <option key={ip} value={ip}>
+                        {ip}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    className="input"
+                    value={hostIp}
+                    onChange={(e) => setHostIp(e.target.value)}
+                    placeholder="Ej: 192.168.1.10"
+                  />
+                </div>
+                {shareUrl ? <div className="miniHelp" style={{ marginTop: 10 }}>{shareUrl}</div> : null}
+                {netError ? <div className="qrHint err">{netError}</div> : <div className="qrHint">Tip: abre NAJU en este PC como <b>http://localhost:1420</b> y usa la IP LAN para el QR.</div>}
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <a className="pillBtn" href={shareUrl || "#"} target="_blank" rel="noreferrer" onClick={(e) => !shareUrl && e.preventDefault()}>
+                  Abrir enlace
+                </a>
+                <button className="pillBtn primary" type="button" onClick={copyShareUrl} disabled={!shareUrl}>
+                  Copiar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
 
         <div className="formGrid">
           <div className="field">
@@ -2894,6 +3057,20 @@ export default function App() {
   const [showNote, setShowNote] = useState(false);
   const [previewFile, setPreviewFile] = useState<PatientFile | null>(null);
 
+  // Deep-link support (used by the QR flow): /?open=note&patientId=...
+  const [pendingOpen, setPendingOpen] = useState<{ kind: "note"; patientId: string } | null>(() => {
+    try {
+      const url = new URL(window.location.href);
+      const open = (url.searchParams.get("open") || "").toLowerCase();
+      const patientId = (url.searchParams.get("patientId") || "").trim();
+      if (open === "note" && patientId) return { kind: "note", patientId };
+    } catch {
+      /* ignore */
+    }
+    return null;
+  });
+  const pendingOpenHandledRef = useRef(false);
+
   const toastTimer = useRef<number | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -3067,6 +3244,36 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Handle QR deep-link after patients load
+  useEffect(() => {
+    if (pendingOpenHandledRef.current) return;
+    if (!pendingOpen) return;
+    if (!patients.length) return;
+
+    const p = patients.find((x) => x.id === pendingOpen.patientId) || null;
+    pendingOpenHandledRef.current = true;
+    setPendingOpen(null);
+
+    try {
+      // Remove query params so it doesn't re-trigger on navigation
+      window.history.replaceState(null, "", window.location.pathname);
+    } catch {
+      /* ignore */
+    }
+
+    if (!p) {
+      pushToast({ type: "err", msg: "No encontré el paciente del enlace QR." });
+      return;
+    }
+
+    startVT(() => {
+      setPage("pacientes");
+      setSelectedId(p.id);
+      setSection("notas");
+      setShowNote(true);
+    });
+  }, [pendingOpen, patients]);
+
   useEffect(() => {
     (async () => {
       if (!selectedId) return;
@@ -3238,6 +3445,10 @@ export default function App() {
         onChange={onFilesSelected}
         style={{ display: "none" }}
       />
+
+      {/* Global animated background (does not affect layout) */}
+      <OceanBackground />
+
       <div className="shell">
         {/* Sidebar */}
         <aside className="sidebar">

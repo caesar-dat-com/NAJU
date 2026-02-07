@@ -2,6 +2,7 @@ import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import fs from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 
 function najuStorePlugin(): Plugin {
   const storeDir = path.resolve(__dirname, "patients");
@@ -62,6 +63,49 @@ function najuStorePlugin(): Plugin {
   return {
     name: "naju-store",
     configureServer(server) {
+      // Expose LAN IPs so QR links can open from other devices on the same network.
+      server.middlewares.use("/__naju_netinfo", async (_req, res) => {
+        try {
+          const ifaces = os.networkInterfaces();
+          const ipv4: string[] = [];
+          for (const k of Object.keys(ifaces)) {
+            const list = ifaces[k] || [];
+            for (const it of list) {
+              if (!it) continue;
+              if (it.family !== "IPv4") continue;
+              if ((it as any).internal) continue;
+              const addr = String((it as any).address || "").trim();
+              if (!addr) continue;
+              if (addr.startsWith("169.254.")) continue; // link-local
+              ipv4.push(addr);
+            }
+          }
+
+          const score = (ip: string) => {
+            if (ip.startsWith("192.168.")) return 0;
+            if (ip.startsWith("10.")) return 1;
+            const m = ip.match(/^172\.(\d+)\./);
+            if (m) {
+              const n = Number(m[1]);
+              if (n >= 16 && n <= 31) return 2;
+            }
+            return 9;
+          };
+          ipv4.sort((a, b) => score(a) - score(b) || a.localeCompare(b));
+
+          const port = (server.config.server?.port as any) || 1420;
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.setHeader("Cache-Control", "no-store");
+          res.end(JSON.stringify({ ok: true, port, ips: ipv4 }));
+        } catch {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.setHeader("Cache-Control", "no-store");
+          res.end(JSON.stringify({ ok: false, port: 1420, ips: [] }));
+        }
+      });
+
       // Persist store.json in /patients
       server.middlewares.use("/__naju_store", async (req, res, next) => {
         try {
@@ -244,6 +288,8 @@ export default defineConfig(async () => ({
   clearScreen: false,
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
+    // Needed so QR links work across devices in the same LAN (Wi-Fi).
+    host: true,
     port: 1420,
     strictPort: true,
     watch: {
