@@ -1416,6 +1416,88 @@ function Modal({
   );
 }
 
+function shortSha(sha: string | null | undefined) {
+  const s = (sha || "").trim();
+  return s ? s.slice(0, 8) : "—";
+}
+
+function UpdateModal({
+  info,
+  busy,
+  onClose,
+  onApply,
+}: {
+  info: any;
+  busy: boolean;
+  onClose: () => void;
+  onApply: () => void;
+}) {
+  const canApply = Boolean(info?.canUpdate !== false);
+  const behind = Boolean(info?.behind);
+
+  return (
+    <Modal
+      title="Actualizar NAJU"
+      subtitle={
+        behind
+          ? "Se detectó una versión más nueva en GitHub."
+          : "Estado de versión y comprobación de GitHub."
+      }
+      onClose={onClose}
+    >
+      <div className="modalBody">
+        <div className="card" style={{ padding: 14 }}>
+          <div className="kv">
+            <div className="k">Versión</div>
+            <div className="v">{String(info?.version || "0.0.0")}</div>
+          </div>
+          <div className="kv">
+            <div className="k">Local</div>
+            <div className="v" style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}>
+              {shortSha(info?.localSha)}
+            </div>
+          </div>
+          <div className="kv">
+            <div className="k">GitHub</div>
+            <div className="v" style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}>
+              {shortSha(info?.remoteSha)}
+            </div>
+          </div>
+          {info?.fetchOk === false ? (
+            <div style={{ marginTop: 8, color: "var(--muted)", fontSize: 12, lineHeight: 1.4 }}>
+              No pude consultar GitHub ahora mismo (offline o sin acceso). Puedes intentar de nuevo.
+            </div>
+          ) : null}
+        </div>
+
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <button className="pillBtn" onClick={onClose}>Cerrar</button>
+          <button
+            className="pillBtn primary"
+            onClick={onApply}
+            disabled={busy || !behind || !canApply}
+            title={!canApply ? "Solo se puede aplicar desde este PC (localhost)." : ""}
+          >
+            {busy ? "Actualizando…" : "Aplicar actualización"}
+          </button>
+        </div>
+
+        {!canApply ? (
+          <div style={{ color: "var(--muted)", fontSize: 12, lineHeight: 1.5 }}>
+            Para seguridad, la actualización automática solo se puede ejecutar desde este PC.
+            Si abriste NAJU desde otro dispositivo por QR, vuelve a abrirlo desde el computador.
+          </div>
+        ) : null}
+
+        <div style={{ color: "var(--muted)", fontSize: 12, lineHeight: 1.5 }}>
+          La actualización ejecuta <b>git pull</b> y luego <b>npm install</b> en tu carpeta local.
+          Cuando termine, NAJU recargará automáticamente.
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function PatientForm({
   initial,
   onSave,
@@ -3057,6 +3139,11 @@ export default function App() {
   const [showNote, setShowNote] = useState(false);
   const [previewFile, setPreviewFile] = useState<PatientFile | null>(null);
 
+  // --- Update (GitHub) ---
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<any | null>(null);
+  const [showUpdate, setShowUpdate] = useState(false);
+
   // Deep-link support (used by the QR flow): /?open=note&patientId=...
   const [pendingOpen, setPendingOpen] = useState<{ kind: "note"; patientId: string } | null>(() => {
     try {
@@ -3079,6 +3166,42 @@ export default function App() {
     if (toastTimer.current) window.clearTimeout(toastTimer.current);
     setToast(t);
     toastTimer.current = window.setTimeout(() => setToast(null), 2600);
+  }
+
+  async function handleUpdateClick() {
+    setUpdateBusy(true);
+    try {
+      const res = await fetch("/__naju_update_check", { cache: "no-store" });
+      const info = await res.json();
+      if (!info?.ok) throw new Error(info?.error || "No se pudo verificar");
+      if (!info.behind) {
+        pushToast({ type: "ok", msg: "Ya estás en la última versión ✅" });
+        return;
+      }
+      setUpdateInfo(info);
+      setShowUpdate(true);
+    } catch (e) {
+      pushToast({ type: "err", msg: `Actualización no disponible: ${errMsg(e)}` });
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
+  async function applyUpdate() {
+    setUpdateBusy(true);
+    try {
+      const res = await fetch("/__naju_update_apply", { method: "POST" });
+      const out = await res.json();
+      if (!out?.ok) throw new Error(out?.error || out?.detail || "No se pudo actualizar");
+      pushToast({ type: "ok", msg: out?.message || (out?.updated ? "Actualizado ✅" : "Sin cambios") });
+      setShowUpdate(false);
+      // After pulling, Vite usually detects file changes. Force a hard reload just in case.
+      window.setTimeout(() => window.location.reload(), 700);
+    } catch (e) {
+      pushToast({ type: "err", msg: `No se pudo actualizar: ${errMsg(e)}` });
+    } finally {
+      setUpdateBusy(false);
+    }
   }
 
   const selected = useMemo(
@@ -3636,6 +3759,8 @@ export default function App() {
                 onGoErrors={() => setPage("errores")}
                 onToggleTheme={toggleTheme}
                 onJumpToPatientCitas={(pid) => pickPatient(pid, "citas")}
+                onUpdate={handleUpdateClick}
+                updateBusy={updateBusy}
               />
             ) : page === "errores" ? (
               <ErrorCenter
@@ -4162,6 +4287,15 @@ export default function App() {
       ) : null}
 
       {previewFile ? <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
+
+      {showUpdate && updateInfo ? (
+        <UpdateModal
+          info={updateInfo}
+          busy={updateBusy}
+          onClose={() => setShowUpdate(false)}
+          onApply={applyUpdate}
+        />
+      ) : null}
 
       {/* Toast simple */}
       {toast ? (

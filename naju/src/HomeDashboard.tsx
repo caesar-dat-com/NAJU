@@ -15,6 +15,8 @@ export default function HomeDashboard(props: {
   onToggleTheme: () => void;
   theme: "light" | "dark";
   onJumpToPatientCitas: (patientId: string) => void;
+  onUpdate: () => void;
+  updateBusy: boolean;
 }) {
   const { patients, allFiles, appointments, profileByPatientMap } = props;
 
@@ -126,6 +128,14 @@ export default function HomeDashboard(props: {
             <button className="pillBtn" onClick={props.onGoAgenda}>📅 Agenda</button>
             <button className="pillBtn" onClick={props.onGoPatients}>👥 Pacientes</button>
             <button className="pillBtn" onClick={props.onGoErrors}>🐞 Errores</button>
+            <button
+              className="pillBtn"
+              onClick={props.onUpdate}
+              disabled={props.updateBusy}
+              title="Busca actualizaciones en GitHub y aplica cambios automáticamente (solo funciona si estás corriendo NAJU con el servidor local)."
+            >
+              {props.updateBusy ? "Actualizando…" : "⬇️ Actualizar"}
+            </button>
             <button className="pillBtn" onClick={props.onToggleTheme} title="Modo claro / oscuro">
               {props.theme === "dark" ? "☀️" : "🌙"}
             </button>

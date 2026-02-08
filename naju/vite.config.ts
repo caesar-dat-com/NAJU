@@ -3,12 +3,36 @@ import react from "@vitejs/plugin-react";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { execFile } from "node:child_process";
+
+function execCmd(cmd: string, args: string[], opts: { cwd?: string; timeoutMs?: number } = {}) {
+  return new Promise<{ ok: boolean; code: number; stdout: string; stderr: string }>((resolve) => {
+    execFile(
+      cmd,
+      args,
+      {
+        cwd: opts.cwd,
+        timeout: opts.timeoutMs ?? 30_000,
+        windowsHide: true,
+        maxBuffer: 10 * 1024 * 1024,
+      },
+      (error: any, stdout: any, stderr: any) => {
+        const code = typeof error?.code === "number" ? error.code : 0;
+        resolve({ ok: !error, code, stdout: String(stdout || ""), stderr: String(stderr || "") });
+      }
+    );
+  });
+}
 
 function najuStorePlugin(): Plugin {
   const storeDir = path.resolve(__dirname, "patients");
   const storeFile = path.join(storeDir, "store.json");
   const assetsDir = path.join(storeDir, "assets");
   const defaultStore = { patients: [], files: [], appointments: [], nextFileId: 1, nextAppointmentId: 1 };
+
+  // Repo root is the parent of /naju (where the .git folder lives).
+  const repoRoot = path.resolve(__dirname, "..");
+  const packageJsonPath = path.resolve(__dirname, "package.json");
 
   async function ensureDir() {
     await fs.mkdir(storeDir, { recursive: true });
@@ -103,6 +127,121 @@ function najuStorePlugin(): Plugin {
           res.setHeader("Content-Type", "application/json; charset=utf-8");
           res.setHeader("Cache-Control", "no-store");
           res.end(JSON.stringify({ ok: false, port: 1420, ips: [] }));
+        }
+      });
+
+      // --- Self-update helpers (GitHub) ---
+      // For safety: only allow update commands from the local machine.
+      function isLocalRequest(req: any) {
+        const ra = String(req?.socket?.remoteAddress || "");
+        return ra === "127.0.0.1" || ra === "::1" || ra.endsWith("::ffff:127.0.0.1");
+      }
+
+      async function readPkgVersion() {
+        try {
+          const raw = await fs.readFile(packageJsonPath, "utf8");
+          const pkg = JSON.parse(raw);
+          return String(pkg?.version || "").trim() || "0.0.0";
+        } catch {
+          return "0.0.0";
+        }
+      }
+
+      server.middlewares.use("/__naju_update_check", async (req, res) => {
+        // GET only
+        if ((req?.method || "GET").toUpperCase() !== "GET") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ ok: false, error: "Método no permitido" }));
+          return;
+        }
+
+        try {
+          const version = await readPkgVersion();
+          const head = await execCmd("git", ["rev-parse", "HEAD"], { cwd: repoRoot, timeoutMs: 15_000 });
+
+          // Fetch remote (best-effort). If it fails, still return local info.
+          const fetch = await execCmd("git", ["fetch", "origin", "main", "--prune"], { cwd: repoRoot, timeoutMs: 30_000 });
+          const remote = fetch.ok
+            ? await execCmd("git", ["rev-parse", "origin/main"], { cwd: repoRoot, timeoutMs: 15_000 })
+            : { ok: false, code: fetch.code, stdout: "", stderr: fetch.stderr };
+
+          const localSha = (head.stdout || "").trim();
+          const remoteSha = (remote.stdout || "").trim();
+          const behind = Boolean(localSha && remoteSha && localSha !== remoteSha);
+
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.setHeader("Cache-Control", "no-store");
+          res.end(
+            JSON.stringify({
+              ok: true,
+              behind,
+              version,
+              localSha,
+              remoteSha: remoteSha || null,
+              canUpdate: isLocalRequest(req),
+              fetchOk: fetch.ok,
+              fetchErr: fetch.ok ? null : String(fetch.stderr || "").trim() || "fetch failed",
+              repo: "origin/main",
+            })
+          );
+        } catch (e: any) {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.setHeader("Cache-Control", "no-store");
+          res.end(JSON.stringify({ ok: false, error: String(e?.message || e || "Error") }));
+        }
+      });
+
+      server.middlewares.use("/__naju_update_apply", async (req, res) => {
+        // POST only
+        if ((req?.method || "GET").toUpperCase() !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ ok: false, error: "Método no permitido" }));
+          return;
+        }
+
+        if (!isLocalRequest(req)) {
+          res.statusCode = 403;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ ok: false, error: "Solo permitido desde este PC." }));
+          return;
+        }
+
+        try {
+          const before = await execCmd("git", ["rev-parse", "HEAD"], { cwd: repoRoot, timeoutMs: 15_000 });
+          const pull = await execCmd("git", ["pull", "--rebase"], { cwd: repoRoot, timeoutMs: 120_000 });
+
+          // Reinstala deps por si el update trae cambios (best-effort).
+          const npm = await execCmd(process.platform === "win32" ? "npm.cmd" : "npm", ["install"], {
+            cwd: path.resolve(repoRoot, "naju"),
+            timeoutMs: 180_000,
+          });
+
+          const after = await execCmd("git", ["rev-parse", "HEAD"], { cwd: repoRoot, timeoutMs: 15_000 });
+          const updated = (before.stdout || "").trim() && (after.stdout || "").trim() && before.stdout.trim() !== after.stdout.trim();
+
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.setHeader("Cache-Control", "no-store");
+          res.end(
+            JSON.stringify({
+              ok: true,
+              updated,
+              beforeSha: (before.stdout || "").trim() || null,
+              afterSha: (after.stdout || "").trim() || null,
+              pull: { ok: pull.ok, stdout: pull.stdout, stderr: pull.stderr },
+              npm: { ok: npm.ok, stdout: npm.stdout, stderr: npm.stderr },
+              message: updated ? "Actualizado. Recarga la página." : "Ya estabas actualizado.",
+            })
+          );
+        } catch (e: any) {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.setHeader("Cache-Control", "no-store");
+          res.end(JSON.stringify({ ok: false, error: String(e?.message || e || "Error") }));
         }
       });
 
